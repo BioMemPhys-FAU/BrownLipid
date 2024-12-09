@@ -2,6 +2,8 @@
 from typing import Union, Dict, Any
 
 import numpy as np
+import matplotlib.pyplot as plt
+
 from tqdm import tqdm 
 
 from .base import base
@@ -76,9 +78,15 @@ class Universe(base):
         else:
             raise ValueError("Currently I cannot handle the provided diffusion coefficients. Either enter float or 2-dimensional numpy array")
 
-    def mean_square_displacement(self):
+    #---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    #Analysis part
 
-        lagtimes = np.arange(1, self.nsteps // self.nstxout)
+    def mean_square_displacement(self, skip):
+        print(f"Calculate MSD from Frame 1/tau {1*self.dt * self.nstxout}ns to Frame {self.nsteps // self.nstxout}/tau {self.nsteps // self.nstxout*self.dt * self.nstxout} with skip Frame {skip/self.dt/ self.nstxout}/tau {skip}")
+
+        skip /= (self.dt / self.nstxout)
+
+        lagtimes = np.arange(1, self.nsteps // self.nstxout, int(skip))
 
         msd = np.zeros( lagtimes.shape[0] , dtype = np.float32)
         sd_per_particle = np.zeros( (lagtimes.shape[0], self.N) , dtype = np.float32)
@@ -108,3 +116,55 @@ class Universe(base):
         print(f'MSD Distribution at {lag * self.dt * self.nstxout / 1000 / 1000} ms') 
 
         return sd_per_particle
+    
+    @staticmethod
+    def mean_square_displacement_fit(tau, msd):
+
+        #tau -> ns
+        #msd -> nm2
+        DiffCoeff, Intercept = np.polyfit(x = tau, y = msd, deg = 1)
+
+        #DiffCoeff -> nm2/ns -> um2/ms
+        #Intercept -> nm2
+
+        return DiffCoeff, Intercept
+
+    @staticmethod
+    def plot_log_histogram_mean_square_displacement_distr(sd_per_particle, lo_limit = 1E-4, up_limit = 1.0, nbins = 51, color = 'red'):
+
+        """
+        Plot histogram with log-space bins
+
+        Parameters
+        ----------
+
+        sd_per_particle := numpy.ndarray
+            Squared-Displacement per particle at a single time-lag tau (expected unit: square-micrometer)
+        lo_limit        := float
+            Lower limit for log-spaced bins (opt.)
+        up_limit        := float
+            Upper limit for log-spaced bins (opt.)
+        nbins           := int
+            Number of log-spaced bins (opt.)
+        color           := str
+            Matplotlib color
+            
+        """
+
+        a = plt.hist(sd_per_particle, 
+                     density=True, 
+                     bins = np.logspace(np.log10(lo_limit),np.log10(up_limit), nbins),
+                     histtype = 'step',
+                     color = color
+                    )
+
+        #Scale
+        plt.xscale('log')
+
+        #Label
+        plt.ylabel('Number of Trajectories')
+        plt.xlabel(r'$\mu$m$^2$')
+
+        
+
+

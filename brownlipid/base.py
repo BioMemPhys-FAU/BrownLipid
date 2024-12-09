@@ -101,13 +101,13 @@ class base:
         dmy =  grid_coord[:, 1] - my
 
         #Apply PBC
-        dmx = np.where(dmx >    size_x / 2, dmx - size_x, dmx)
-        dmx = np.where(dmx <= - size_x / 2, dmx + size_x, dmx)
+        dmx = np.where(dmx >   size_x / 2, dmx - size_x, dmx)
+        dmx = np.where(dmx <= -size_x / 2, dmx + size_x, dmx)
 
-        dmy = np.where(dmy >    size_y / 2, dmy - size_y, dmy)
-        dmy = np.where(dmy <= - size_y / 2, dmy + size_y, dmy)
+        dmy = np.where(dmy >   size_y / 2, dmy - size_y, dmy)
+        dmy = np.where(dmy <= -size_y / 2, dmy + size_y, dmy)
 
-        cond = (0 <= dmx) & (dmx <= Lx) & (0 <= dmy) & (dmy <= Ly)
+        cond = (-Lx/2 <= dmx) & (dmx <= Lx/2) & (-Ly/2 <= dmy) & (dmy <= Ly/2)
 
         dom_grid = np.int64( np.round( grid_coord[ cond ] / dx ) )
 
