@@ -2,7 +2,7 @@ import brownlipid
 import numpy as np
 import pytest
 
-@pytest.mark.parametrize("L,d_coeff,N,dim,nsteps,dt,grid", [(100, 1., 100000, 2, 1E5, 1, 0.1)])
+@pytest.mark.parametrize("L,d_coeff,N,dim,nsteps,dt,grid", [(100, 1., 100000, 2, 1E6, 1, 0.1)])
 def test_diffusion_coefficient(L,d_coeff,N,dim,nsteps,dt,grid):
 
 
@@ -14,7 +14,7 @@ def test_diffusion_coefficient(L,d_coeff,N,dim,nsteps,dt,grid):
                                  dim = dim,
                               nsteps = int(nsteps),
                                   dt = dt,
-                             nstxout = 100,
+                             nstxout = 250,
                         base_d_coeff = d_coeff,
                                 grid = grid
                             )

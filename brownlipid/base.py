@@ -16,6 +16,7 @@ class base:
                 nsteps:                      int = 5000,
                     dt:                    float = 0.1,
                nstxout:                      int = 1,
+                nstchk:                      int = 1, 
           base_d_coeff:                    float = 1.,
                   grid:                    float = 0.1,
                domains:                     dict = {},
@@ -32,9 +33,18 @@ class base:
         self.nsteps       = nsteps
         self.dt           = dt
         self.nstxout      = nstxout
+        self.nstchk       = nstck
         self.base_d_coeff = base_d_coeff
         self.grid         = grid
         self.output       = output
+
+        #Base checking
+        assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
+        assert self.nstxout >= self.nstchk, "Frequency of output (nstxout) must be larger than frequency of checkpoints (nstchk)!"
+
+        assert self.nsteps % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of number of steps!"
+        assert self.nsteps % self.nstchk  == 0, "Frequency of checkpoints (nstchk) must be multiple of number of steps!"
+        assert self.nstxout % self.nstchk == 0, "Frequency of checkpoints (nstchk) must be multiple of frequency of output (nstxout)!"
 
         #Init domains
         if any( domains ):

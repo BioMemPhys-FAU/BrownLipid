@@ -14,9 +14,9 @@ class Universe(base):
 
         self.w_universe = self.populate_universe_uniform()
         self.u_universe = np.copy( self.w_universe )
-
-        w_storage   = np.zeros( (self.nsteps // self.nstxout, self.N, 2 ), dtype = np.float32 )
-        u_storage   = np.zeros( (self.nsteps // self.nstxout, self.N, 2 ), dtype = np.float32 )
+        
+        w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
+        u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
 
         for i in tqdm( range( self.nsteps ) ):
             
@@ -29,16 +29,32 @@ class Universe(base):
             #Apply boundary conditions
             self.apply_pbc()
 
+            #Write current state of the universe into storage arrays
             if not i % self.nstxout: 
-                w_storage[ i // self.nstxout ] = self.w_universe
-                u_storage[ i // self.nstxout ] = self.u_universe
 
-        np.save( arr = w_storage, file = "wrap_"   + self.output )
-        np.save( arr = u_storage, file = "unwrap_" + self.output )
+                #Calculate current time
+                time = self.dt * i
 
-        self.w_storage = w_storage
-        self.u_storage = u_storage
+                w_storage[ i // self.nstxout, 0  ] = time
+                u_storage[ i // self.nstxout, 1  ] = time
 
+                w_storage[ i // self.nstxout, 1: ] = self.w_universe
+                u_storage[ i // self.nstxout, 1: ] = self.u_universe
+
+                #If check pointing is requested then write current storage arrays to disk
+                #and renew them
+                if not i % self.nstchk and i > 0:
+
+                    #Number of current check point
+                    chk_number = str(self.i // self.nstchk)
+                    
+                    np.save( arr = w_storage, file = self.output +   f"_wrap.{chk_number.zfill(5)}" )
+                    np.save( arr = u_storage, file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
+        
+                    w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
+                    u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
+
+                    
         
     def populate_universe_uniform(self):
 
@@ -78,13 +94,62 @@ class Universe(base):
         else:
             raise ValueError("Currently I cannot handle the provided diffusion coefficients. Either enter float or 2-dimensional numpy array")
 
-    #---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     #Analysis part
 
-    def mean_square_displacement(self, skip):
-        print(f"Calculate MSD from Frame 1/tau {1*self.dt * self.nstxout}ns to Frame {self.nsteps // self.nstxout}/tau {self.nsteps // self.nstxout*self.dt * self.nstxout} with skip Frame {skip/self.dt/ self.nstxout}/tau {skip}")
+    def load_data_unwrap(self):
 
-        skip /= (self.dt / self.nstxout)
+        try:
+            if self.u_storage.shape[0] == self.nsteps // self.nstxout: return 0
+        except: pass
+        
+        self.u_storage = np.zeros( (0, self.N, self.dim + 1 ), dtype = np.float32 )
+
+        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
+
+            chk_number = str(chk_number)
+
+            self.u_storage = np.vstack( (u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}") ))
+
+        #Validation
+        assert self.u_storage.shape[0] == self.nsteps // self.nstxout, "Number of frames is not correct!"
+
+        assert np.allclose(np.diff(self.u_storage[:, 0]), self.nstxout * self.dt), "Validation of loaded unwrapped trajectory was not successful!"
+        assert np.allclose(self.nstxout * self.dt, np.diff(self.u_storage[:, 0])), "Validation of loaded unwrapped trajectory was not successful!"
+
+        return 1
+    
+    def load_data_wrap(self):
+
+        try:
+            if self.w_storage.shape[0] == self.nsteps // self.nstxout: return 0
+        except: pass
+        
+        self.w_storage = np.zeros( (0, self.N, self.dim + 1 ), dtype = np.float32 )
+
+        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
+
+            chk_number = str(chk_number)
+
+            self.w_storage = np.vstack( (w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}") ))
+
+        #Validation
+        assert self.w_storage.shape[0] == self.nsteps // self.nstxout, "Number of frames is not correct!"
+
+        assert np.allclose(np.diff(self.w_storage[:, 0]), self.nstxout * self.dt), "Validation of loaded wrapped trajectory was not successful!"
+        assert np.allclose(self.nstxout * self.dt, np.diff(self.w_storage[:, 0])), "Validation of loaded wrapped trajectory was not successful!"
+
+        return 1
+
+
+    def mean_square_displacement(self, skip):
+
+        print(f"Calculate MSD from Frame 1/tau {1*self.dt * self.nstxout}ns to Frame {self.nsteps // self.nstxout}/tau {(self.nsteps // self.nstxout) * self.dt * self.nstxout} with skip Frame {skip/(self.dt* self.nstxout)}/tau {skip}ns")
+
+        #Load data
+        self.load_data_unwrap()
+
+        skip /= (self.dt * self.nstxout)
 
         lagtimes = np.arange(1, self.nsteps // self.nstxout, int(skip))
 
@@ -105,8 +170,11 @@ class Universe(base):
         return tau, msd, sd_per_particle
     
     def mean_square_displacement_distr(self, tau):
+       
+        #Load data
+        self.load_data_unwrap()
 
-        lag = int(np.round(tau / self.dt / self.nstxout))
+        lag = int(np.round(tau / (self.dt * self.nstxout) ))
 
         dr = self.u_storage[:-lag, :, :] - self.u_storage[lag:, :, :]
         sqdist = np.square(dr).sum(axis=-1)
@@ -119,7 +187,7 @@ class Universe(base):
     
     @staticmethod
     def mean_square_displacement_fit(tau, msd):
-
+        
         #tau -> ns
         #msd -> nm2
         DiffCoeff, Intercept = np.polyfit(x = tau, y = msd, deg = 1)
