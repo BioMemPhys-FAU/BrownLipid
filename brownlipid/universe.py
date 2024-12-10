@@ -35,11 +35,11 @@ class Universe(base):
                 #Calculate current time
                 time = self.dt * i
 
-                w_storage[ i // self.nstxout, 0  ] = time
-                u_storage[ i // self.nstxout, 1  ] = time
+                w_storage[ i // self.nstxout, :, 0  ] = time
+                u_storage[ i // self.nstxout, :, 0  ] = time
 
-                w_storage[ i // self.nstxout, 1: ] = self.w_universe
-                u_storage[ i // self.nstxout, 1: ] = self.u_universe
+                w_storage[ i // self.nstxout, :, 1: ] = self.w_universe
+                u_storage[ i // self.nstxout, :, 1: ] = self.u_universe
 
                 #If check pointing is requested then write current storage arrays to disk
                 #and renew them
