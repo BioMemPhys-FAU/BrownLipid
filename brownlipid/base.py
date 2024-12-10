@@ -33,7 +33,7 @@ class base:
         self.nsteps       = nsteps
         self.dt           = dt
         self.nstxout      = nstxout
-        self.nstchk       = nstck
+        self.nstchk       = nstchk
         self.base_d_coeff = base_d_coeff
         self.grid         = grid
         self.output       = output
