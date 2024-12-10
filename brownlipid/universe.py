@@ -15,10 +15,12 @@ class Universe(base):
         self.w_universe = self.populate_universe_uniform()
         self.u_universe = np.copy( self.w_universe )
         
-        w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
-        u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
+        w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
+        u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
 
-        for i in tqdm( range( self.nsteps ) ):
+        idx_norm = self.nstchk // self.nstxout
+
+        for i in tqdm( range( self.nsteps + 1) ):
             
             #Check diffusion coefficients
             self.effective_d_coeffs = self.generate_diffusion()
@@ -35,24 +37,21 @@ class Universe(base):
                 #Calculate current time
                 time = self.dt * i
 
-                w_storage[ i // self.nstxout, :, 0  ] = time
-                u_storage[ i // self.nstxout, :, 0  ] = time
-
-                w_storage[ i // self.nstxout, :, 1: ] = self.w_universe
-                u_storage[ i // self.nstxout, :, 1: ] = self.u_universe
+                w_storage[ i // self.nstxout % idx_norm, :, : ] = self.w_universe
+                u_storage[ i // self.nstxout % idx_norm, :, : ] = self.u_universe
 
                 #If check pointing is requested then write current storage arrays to disk
                 #and renew them
                 if not i % self.nstchk and i > 0:
 
                     #Number of current check point
-                    chk_number = str(self.i // self.nstchk)
+                    chk_number = str(i // self.nstchk)
                     
                     np.save( arr = w_storage, file = self.output +   f"_wrap.{chk_number.zfill(5)}" )
                     np.save( arr = u_storage, file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
         
-                    w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
-                    u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim + 1 ), dtype = np.float32 )
+                    w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
+                    u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
 
                     
         
@@ -103,19 +102,16 @@ class Universe(base):
             if self.u_storage.shape[0] == self.nsteps // self.nstxout: return 0
         except: pass
         
-        self.u_storage = np.zeros( (0, self.N, self.dim + 1 ), dtype = np.float32 )
+        self.u_storage = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
 
             chk_number = str(chk_number)
 
-            self.u_storage = np.vstack( (u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}") ))
+            self.u_storage = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy") ))
 
         #Validation
         assert self.u_storage.shape[0] == self.nsteps // self.nstxout, "Number of frames is not correct!"
-
-        assert np.allclose(np.diff(self.u_storage[:, 0]), self.nstxout * self.dt), "Validation of loaded unwrapped trajectory was not successful!"
-        assert np.allclose(self.nstxout * self.dt, np.diff(self.u_storage[:, 0])), "Validation of loaded unwrapped trajectory was not successful!"
 
         return 1
     
@@ -125,19 +121,16 @@ class Universe(base):
             if self.w_storage.shape[0] == self.nsteps // self.nstxout: return 0
         except: pass
         
-        self.w_storage = np.zeros( (0, self.N, self.dim + 1 ), dtype = np.float32 )
+        self.w_storage = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
 
             chk_number = str(chk_number)
 
-            self.w_storage = np.vstack( (w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}") ))
+            self.w_storage = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy") ))
 
         #Validation
         assert self.w_storage.shape[0] == self.nsteps // self.nstxout, "Number of frames is not correct!"
-
-        assert np.allclose(np.diff(self.w_storage[:, 0]), self.nstxout * self.dt), "Validation of loaded wrapped trajectory was not successful!"
-        assert np.allclose(self.nstxout * self.dt, np.diff(self.w_storage[:, 0])), "Validation of loaded wrapped trajectory was not successful!"
 
         return 1
 

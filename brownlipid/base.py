@@ -40,11 +40,11 @@ class base:
 
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
-        assert self.nstxout >= self.nstchk, "Frequency of output (nstxout) must be larger than frequency of checkpoints (nstchk)!"
+        assert self.nstchk >= self.nstxout, "Frequency of output (nstxout) must be smaller than frequency of checkpoints (nstchk)!"
 
         assert self.nsteps % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of number of steps!"
         assert self.nsteps % self.nstchk  == 0, "Frequency of checkpoints (nstchk) must be multiple of number of steps!"
-        assert self.nstxout % self.nstchk == 0, "Frequency of checkpoints (nstchk) must be multiple of frequency of output (nstxout)!"
+        assert self.nstchk % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of frequency of checkpoints (nstchk)!"
 
         #Init domains
         if any( domains ):
