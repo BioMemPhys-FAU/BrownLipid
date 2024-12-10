@@ -15,12 +15,20 @@ class Universe(base):
         self.w_universe = self.populate_universe_uniform()
         self.u_universe = np.copy( self.w_universe )
         
-        w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
-        u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
+        w_storage  = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
+        u_storage  = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
+
+        time_array = np.zeros(  self.nstchk // self.nstxout, dtype = np.float32 )
+        
+        #Store initial frame
+        w_storage[0] = self.w_universe
+        u_storage[0] = self.u_universe
+
+        time_array[0] = 0
 
         idx_norm = self.nstchk // self.nstxout
 
-        for i in tqdm( range( self.nsteps + 1) ):
+        for i in tqdm(range(1, self.nsteps + 1) ):
             
             #Check diffusion coefficients
             self.effective_d_coeffs = self.generate_diffusion()
@@ -37,21 +45,38 @@ class Universe(base):
                 #Calculate current time
                 time = self.dt * i
 
-                w_storage[ i // self.nstxout % idx_norm, :, : ] = self.w_universe
-                u_storage[ i // self.nstxout % idx_norm, :, : ] = self.u_universe
+                if i == self.nsteps:
 
+                    w_storage = np.vstack((w_storage, self.w_universe.reshape(1, self.N, self.dim)))
+                    u_storage = np.vstack((u_storage, self.u_universe.reshape(1, self.N, self.dim)))
+                    
+                    time_array = np.append(time_array, time)
+                
                 #If check pointing is requested then write current storage arrays to disk
                 #and renew them
-                if not i % self.nstchk and i > 0:
-
+                if not i % self.nstchk:
+                
                     #Number of current check point
                     chk_number = str(i // self.nstchk)
+
+                    np.save( arr = time_array, file = self.output +   f"_time.{chk_number.zfill(5)}" )
                     
-                    np.save( arr = w_storage, file = self.output +   f"_wrap.{chk_number.zfill(5)}" )
-                    np.save( arr = u_storage, file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
+                    np.save( arr = w_storage,  file = self.output +   f"_wrap.{chk_number.zfill(5)}" )
+                    np.save( arr = u_storage,  file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
         
                     w_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
                     u_storage = np.zeros( (self.nstchk // self.nstxout, self.N, self.dim ), dtype = np.float32 )
+        
+                    time_array = np.zeros(  self.nstchk // self.nstxout, dtype = np.float32 )
+
+                #--------------------------------------------------------------------------------------------------
+                
+                w_storage[ (i // self.nstxout) % idx_norm, :, : ] = self.w_universe
+                u_storage[ (i // self.nstxout) % idx_norm, :, : ] = self.u_universe
+                
+                time_array[ (i // self.nstxout) % idx_norm ] = time
+
+
 
                     
         
@@ -102,16 +127,22 @@ class Universe(base):
             if self.u_storage.shape[0] == self.nsteps // self.nstxout: return 0
         except: pass
         
-        self.u_storage = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
+        self.u_storage  = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
+        self.time_array = np.zeros( (0)                   , dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
 
             chk_number = str(chk_number)
 
-            self.u_storage = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy") ))
+            self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy") ))
+
+            self.time_array = np.append( self.time_array, np.load(self.output +   f"_time.{chk_number.zfill(5)}.npy")  ) 
 
         #Validation
-        assert self.u_storage.shape[0] == self.nsteps // self.nstxout, "Number of frames is not correct!"
+        assert self.u_storage.shape[0] == (self.nsteps // self.nstxout) + 1, "Number of frames is not correct!"
+
+        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout ), "Time step distance is not as expected!"
+        assert np.allclose( self.dt * self.nstxout, np.diff( self.time_array ) ), "Time step distance is not as expected!"
 
         return 1
     
@@ -121,16 +152,22 @@ class Universe(base):
             if self.w_storage.shape[0] == self.nsteps // self.nstxout: return 0
         except: pass
         
-        self.w_storage = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
+        self.w_storage  = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
+        self.time_array = np.zeros( (0)                   , dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
 
             chk_number = str(chk_number)
 
-            self.w_storage = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy") ))
+            self.w_storage  = np.vstack( (self.w_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy") ))
+
+            self.time_array = np.append( self.time_array, np.load(self.output +   f"_time.{chk_number.zfill(5)}.npy")  ) 
 
         #Validation
-        assert self.w_storage.shape[0] == self.nsteps // self.nstxout, "Number of frames is not correct!"
+        assert self.u_storage.shape[0] == (self.nsteps // self.nstxout) + 1, "Number of frames is not correct!"
+
+        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout ), "Time step distance is not as expected!"
+        assert np.allclose( self.dt * self.nstxout, np.diff( self.time_array ) ), "Time step distance is not as expected!"
 
         return 1
 
@@ -191,7 +228,7 @@ class Universe(base):
         return DiffCoeff, Intercept
 
     @staticmethod
-    def plot_log_histogram_mean_square_displacement_distr(sd_per_particle, lo_limit = 1E-4, up_limit = 1.0, nbins = 51, color = 'red'):
+    def plot_log_histogram_mean_square_displacement_distr(sd_per_particle, label, lo_limit = 1E-4, up_limit = 1.0, nbins = 51, color = 'red'):
 
         """
         Plot histogram with log-space bins
@@ -201,6 +238,8 @@ class Universe(base):
 
         sd_per_particle := numpy.ndarray
             Squared-Displacement per particle at a single time-lag tau (expected unit: square-micrometer)
+        label           := str
+            Label for legend
         lo_limit        := float
             Lower limit for log-spaced bins (opt.)
         up_limit        := float
@@ -216,7 +255,8 @@ class Universe(base):
                      density=True, 
                      bins = np.logspace(np.log10(lo_limit),np.log10(up_limit), nbins),
                      histtype = 'step',
-                     color = color
+                     color = color,
+                     label = label
                     )
 
         #Scale
@@ -224,7 +264,7 @@ class Universe(base):
 
         #Label
         plt.ylabel('Number of Trajectories')
-        plt.xlabel(r'$\mu$m$^2$')
+        plt.xlabel(r'MSD / $\mu$m$^2$')
 
         
 
