@@ -20,6 +20,7 @@ class base:
           base_d_coeff:                    float = 1.,
                   grid:                    float = 0.1,
                domains:                     dict = {},
+       hard_boundaries:                     dict = {},
                 output:                      str = 'output'
 
                 ):
@@ -84,6 +85,67 @@ class base:
             self.d_coeffs = d_coeffs
 
         else: self.d_coeffs = base_d_coeff
+
+        if any( hard_boundaries ):
+            
+            #------------------------------------------------------------------------------------------------------------------------------------------------------#
+
+            hard_boundaries_grid  = np.zeros( ( int(self.size_x/self.grid + 1), int(self.size_y/self.grid + 1) ) , dtype = object)
+
+            hard_boundaries_grid[:, :] = ''
+
+            hard_boundaries_geometry = {}
+
+            #------------------------------------------------------------------------------------------------------------------------------------------------------#
+
+            grid_coord = np.meshgrid(np.linspace( 0, self.size_x, int(self.size_x/self.grid + 1) ),
+                                     np.linspace( 0, self.size_y, int(self.size_y/self.grid + 1) ) 
+                                    )
+
+            grid_coord = np.vstack(( grid_coord[0].flatten(), grid_coord[1].flatten() )).T
+
+            for key, geometries in hard_boundaries.items():
+
+                if key == 'Circle':
+
+                    for i, geometry in enumerate(geometries):
+
+                        circle = self.add_circ(r  = geometry[0], mx = geometry[1], my = geometry[2],
+                                               dx = self.grid, grid_coord = grid_coord,
+                                               size_x = self.size_x, size_y = self.size_y)
+                        
+                        hard_boundaries_grid[circle[:, 0], circle[:, 1]] = f"c{i}"
+
+                        hard_boundaries_geometry[f"c{i}"] = np.array([geometry[1], geometry[2]])
+
+                elif key == 'Rectangle':
+                    
+                    for i, geometry in enumerate(geometries):
+        
+                        rectangle = self.add_rectangle(mx = geometry[0], my = geometry[1],
+                                                       Lx = geometry[2], Ly = geometry[3],
+                                                       dx = self.grid, grid_coord = grid_coord,
+                                                       size_x = self.size_x, size_y = self.size_y)
+
+                        hard_boundaries_grid[rectangle[:, 0], rectangle[:, 1]] = f"p{i}"
+                        
+                        mx = geometry[0]
+                        my = geometry[1]
+                        Lx = geometry[2]
+                        Ly = geometry[3]
+
+                        hard_boundaries_geometry[f"p{i}"] = []
+
+                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx - Lx/2], [my - Ly/2]]))
+                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx - Lx/2], [my + Ly/2]]))
+                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx + Lx/2], [my + Ly/2]]))
+                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx + Lx/2], [my - Ly/2]]))
+
+            self.hard_boundaries_geometry = hard_boundaries_geometry
+
+            self.hard_boundaries_grid = hard_boundaries_grid
+
+        else: self.hard_boundaries_geometries = {}
 
     @staticmethod
     def add_circ( mx, my, r, dx, grid_coord, size_x, size_y):
