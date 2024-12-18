@@ -7,21 +7,20 @@ from tqdm import tqdm
 class base:
 
     def __init__(
-                self,
-                size_x:                    float = 10.0,
-                size_y:                    float = 10.0,
-                size_z:                    float = 10.0,
-                     N:                      int = 1000,
-                   dim:                      int = 2,
-                nsteps:                      int = 5000,
-                    dt:                    float = 0.1,
-               nstxout:                      int = 1,
-                nstchk:                      int = 1, 
-          base_d_coeff:                    float = 1.,
-                  grid:                    float = 0.1,
-               domains:                     dict = {},
-       hard_boundaries:                     dict = {},
-                output:                      str = 'output'
+                           self,
+                          size_x:                    float = 10.0,
+                          size_y:                    float = 10.0,
+                          size_z:                    float = 10.0,
+                               N:                      int = 1000,
+                             dim:                      int = 2,
+                          nsteps:                      int = 5000,
+                              dt:                    float = 0.1,
+                         nstxout:                      int = 1,
+                          nstchk:                      int = 1, 
+                    base_d_coeff:                    float = 1.,
+                         domains:                     dict = {},
+                 hard_boundaries:                     dict = {},
+                          output:                      str = 'output'
 
                 ):
 
@@ -36,7 +35,6 @@ class base:
         self.nstxout      = nstxout
         self.nstchk       = nstchk
         self.base_d_coeff = base_d_coeff
-        self.grid         = grid
         self.output       = output
 
         #Base checking
@@ -50,141 +48,94 @@ class base:
         #Init domains
         if any( domains ):
 
-            d_coeffs  = np.ones( ( int(self.size_x/self.grid + 1), int(self.size_y/self.grid + 1) ) )
-            d_coeffs *= self.base_d_coeff
-
-            grid_coord = np.meshgrid(np.linspace( 0, self.size_x, int(self.size_x/self.grid + 1) ),
-                                     np.linspace( 0, self.size_y, int(self.size_y/self.grid + 1) ) 
-                                    )
-
-            grid_coord = np.vstack(( grid_coord[0].flatten(), grid_coord[1].flatten() )).T
-
             for key, geometries in domains.items():
 
                 if key == 'Circle':
 
-                    for geometry in geometries:
+                    for i, geometry in enumerate(geometries):
 
-                        circle = self.add_circ(r  = geometry[1], mx = geometry[2], my = geometry[3],
-                                               dx = self.grid, grid_coord = grid_coord,
-                                               size_x = self.size_x, size_y = self.size_y)
-                        
-                        d_coeffs[circle[:, 0], circle[:, 1]] = geometry[0]
+                        domains[f"c{i}"] = [np.array([geometry[1], geometry[2]]), geometry[0]]
 
                 elif key == 'Rectangle':
                     
-                    for geometry in geometries:
+                    for i, geometry in enumerate(geometries):
+
+                        mx = geometry[0]
+                        my = geometry[1]
+                        Lx = geometry[2]
+                        Ly = geometry[3]
+
+                        #Generate rectangle edges clockwise
+                        #Increase rectangle slightly in positive x- and y-direction
+                        edges = []
+
+                        edges.append( np.array([ mx - Lx/2 , my - Ly/2 ]) )
+                        edges.append( np.array([ mx - Lx/2 , my + Ly/2 ]) )
+                        edges.append( np.array([ mx + Lx/2 , my + Ly/2 ]) )
+                        edges.append( np.array([ mx + Lx/2 , my - Ly/2 ]) )
+                        
+                        domains[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
+                        
+                        domains[f"p{i}"].append( Lx )
+                        domains[f"p{i}"].append( Ly )
+                        domains[f"p{i}"].append( np.array( [ mx, my ] ) )
         
-                        rectangle = self.add_rectangle(mx = geometry[1], my = geometry[2],
-                                                       Lx = geometry[3], Ly = geometry[4],
-                                                       dx = self.grid, grid_coord = grid_coord,
-                                                       size_x = self.size_x, size_y = self.size_y)
-
-                        d_coeffs[rectangle[:, 0], rectangle[:, 1]] = geometry[0]
-
-            self.d_coeffs = d_coeffs
-
         else: self.d_coeffs = base_d_coeff
 
         if any( hard_boundaries ):
-            
-            #------------------------------------------------------------------------------------------------------------------------------------------------------#
-
-            hard_boundaries_grid  = np.zeros( ( int(self.size_x/self.grid + 1), int(self.size_y/self.grid + 1) ) , dtype = object)
-
-            hard_boundaries_grid[:, :] = ''
 
             hard_boundaries_geometry = {}
-
-            #------------------------------------------------------------------------------------------------------------------------------------------------------#
-
-            grid_coord = np.meshgrid(np.linspace( 0, self.size_x, int(self.size_x/self.grid + 1) ),
-                                     np.linspace( 0, self.size_y, int(self.size_y/self.grid + 1) ) 
-                                    )
-
-            grid_coord = np.vstack(( grid_coord[0].flatten(), grid_coord[1].flatten() )).T
-
+            
             for key, geometries in hard_boundaries.items():
 
                 if key == 'Circle':
 
                     for i, geometry in enumerate(geometries):
 
-                        circle = self.add_circ(r  = geometry[0], mx = geometry[1], my = geometry[2],
-                                               dx = self.grid, grid_coord = grid_coord,
-                                               size_x = self.size_x, size_y = self.size_y)
-                        
-                        hard_boundaries_grid[circle[:, 0], circle[:, 1]] = f"c{i}"
 
-                        hard_boundaries_geometry[f"c{i}"] = np.array([geometry[1], geometry[2]])
+                        hard_boundaries_geometry[f"c{i}"] = [np.array([geometry[1],
+                                                                       geometry[2]]),
+                                                                       geometry[0]
+                                                             ]
 
                 elif key == 'Rectangle':
                     
                     for i, geometry in enumerate(geometries):
-        
-                        rectangle = self.add_rectangle(mx = geometry[0], my = geometry[1],
-                                                       Lx = geometry[2], Ly = geometry[3],
-                                                       dx = self.grid, grid_coord = grid_coord,
-                                                       size_x = self.size_x, size_y = self.size_y)
 
-                        hard_boundaries_grid[rectangle[:, 0], rectangle[:, 1]] = f"p{i}"
-                        
                         mx = geometry[0]
                         my = geometry[1]
                         Lx = geometry[2]
                         Ly = geometry[3]
 
-                        hard_boundaries_geometry[f"p{i}"] = []
+                        #Generate rectangle edges clockwise
+                        #Increase rectangle slightly in positive x- and y-direction
+                        edges = []
 
-                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx - Lx/2], [my - Ly/2]]))
-                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx - Lx/2], [my + Ly/2]]))
-                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx + Lx/2], [my + Ly/2]]))
-                        hard_boundaries_geometry[f"p{i}"].append( np.array([[mx + Lx/2], [my - Ly/2]]))
+                        edges.append( np.array([ mx - Lx/2 , my - Ly/2 ]) )
+                        edges.append( np.array([ mx - Lx/2 , my + Ly/2 ]) )
+                        edges.append( np.array([ mx + Lx/2 , my + Ly/2 ]) )
+                        edges.append( np.array([ mx + Lx/2 , my - Ly/2 ]) )
+                        
+                        hard_boundaries_geometry[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
+                        
+                        hard_boundaries_geometry[f"p{i}"].append( Lx )
+                        hard_boundaries_geometry[f"p{i}"].append( Ly )
+                        hard_boundaries_geometry[f"p{i}"].append( np.array( [ mx, my ] ) )
 
             self.hard_boundaries_geometry = hard_boundaries_geometry
 
-            self.hard_boundaries_grid = hard_boundaries_grid
-
         else: self.hard_boundaries_geometries = {}
-
-    @staticmethod
-    def add_circ( mx, my, r, dx, grid_coord, size_x, size_y):
-
-        dmx =  grid_coord[:, 0] - mx
-        dmy =  grid_coord[:, 1] - my
+    
+    def base_apply_pbc_vector(self, vec):
 
         #Apply PBC
-        dmx = np.where(dmx >    size_x / 2, dmx - size_x, dmx)
-        dmx = np.where(dmx <= - size_x / 2, dmx + size_x, dmx)
+        vec[0] = np.where(vec[0] >    self.size_x / 2, vec[0] - self.size_x, vec[0])
+        vec[0] = np.where(vec[0] <= - self.size_x / 2, vec[0] + self.size_x, vec[0])
 
-        dmy = np.where(dmy >    size_y / 2, dmy - size_y, dmy)
-        dmy = np.where(dmy <= - size_y / 2, dmy + size_y, dmy)
+        vec[1] = np.where(vec[1] >    self.size_y / 2, vec[1] - self.size_y, vec[1])
+        vec[1] = np.where(vec[1] <= - self.size_y / 2, vec[1] + self.size_y, vec[1])
 
-        dist_m = np.sqrt( dmx**2 + dmy**2 )
-
-        dom_grid = np.int64( np.round( grid_coord[ dist_m <= r ] / dx ) )
-
-        return dom_grid
-
-    @staticmethod
-    def add_rectangle(mx, my, Lx, Ly, dx, grid_coord, size_x, size_y):
-
-        dmx =  grid_coord[:, 0] - mx
-        dmy =  grid_coord[:, 1] - my
-
-        #Apply PBC
-        dmx = np.where(dmx >   size_x / 2, dmx - size_x, dmx)
-        dmx = np.where(dmx <= -size_x / 2, dmx + size_x, dmx)
-
-        dmy = np.where(dmy >   size_y / 2, dmy - size_y, dmy)
-        dmy = np.where(dmy <= -size_y / 2, dmy + size_y, dmy)
-
-        cond = (-Lx/2 <= dmx) & (dmx <= Lx/2) & (-Ly/2 <= dmy) & (dmy <= Ly/2)
-
-        dom_grid = np.int64( np.round( grid_coord[ cond ] / dx ) )
-
-        return dom_grid
-
+        return vec
 
 
     
