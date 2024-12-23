@@ -50,7 +50,8 @@ class Universe(base):
         u_storage  = np.zeros( ( nstchk_frames + 1, self.N, self.dim ), dtype = np.float32 )
 
         #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
-        time_array = np.zeros(  nstchk_frames, dtype = np.float32 )
+        time_array = np.zeros(  nstchk_frames + 1, dtype = np.float32 )
+        f_inside = np.zeros(  (nstchk_frames + 1, self.N), dtype = np.float32 )
         
         #Store initial frame
         w_storage[0] = self.w_universe
@@ -58,6 +59,9 @@ class Universe(base):
         
         #Store initial time
         time_array[0] = 0
+
+        #Store initial fraction of particles in domains
+        f_inside[0] = self.in_domains
 
         #---------------------------------------------------------------------------------------------------------------------
         #Main Iteration
@@ -70,21 +74,18 @@ class Universe(base):
             #-----------------------------------------------------------------------------------------------------------------
             #Evolve particle position
 
-            #Check diffusion coefficients
-            self.effective_d_coeffs = self.generate_diffusion()
-
             #Move particles in time
             self.forward_in_time()
             
             #Apply boundary conditions
             self.apply_pbc()
-
+            
             #Apply hard boundaries
             self.hard_boundaries()
-
-            #Apply boundary conditions
-            self.apply_pbc()
             
+            #Check diffusion coefficients
+            self.update_diffusion()
+
             #-----------------------------------------------------------------------------------------------------------------
             #Store particle positions
 
@@ -102,12 +103,14 @@ class Universe(base):
                 #Fill storage arrays
 
                 #Current frame index in the current checkpoint file
-                chk_frame_index = (i // self.nstxout) % nstchk_frames
+                chk_frame_index = ( ( (i-1) // self.nstxout) % nstchk_frames ) + self.heaviside(x = i, treshold = self.nstchk)
                 
                 w_storage[ chk_frame_index, :, : ] = self.w_universe
                 u_storage[ chk_frame_index, :, : ] = self.u_universe
                 
-                time_array[ frame_number ] = time
+                time_array[ chk_frame_index ] = time
+
+                f_inside[ chk_frame_index ] = self.in_domains 
 
                 #If check pointing is requested then write current storage arrays to disk and renew them
                 if not i % self.nstchk:
@@ -120,6 +123,8 @@ class Universe(base):
                     np.save( arr = u_storage,  file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
                     
                     np.save( arr = time_array, file = self.output +   f"_time.{chk_number.zfill(5)}" )
+                    
+                    np.save( arr = f_inside, file = self.output +   f"_f_inside.{chk_number.zfill(5)}" )
         
                     #Setup storage for positions -> Shape: (Number of frames in checkpoint file, Number of Particles, Number of dimensions)
                     w_storage  = np.zeros( ( nstchk_frames, self.N, self.dim ), dtype = np.float32 )
@@ -127,7 +132,17 @@ class Universe(base):
 
                     #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
                     time_array = np.zeros(  nstchk_frames, dtype = np.float32 )
+                    
+                    f_inside = np.zeros(  (nstchk_frames, self.N), dtype = np.float32 )
+    
+    @staticmethod
+    def heaviside(x, treshold):
 
+        if x <= treshold: return 1
+        else: return 0
+
+    #--------------------------------------------------------------------------------------------------------------
+    # Function for initilization of the universe
 
     def populate_universe_uniform(self):
 
@@ -136,49 +151,11 @@ class Universe(base):
         for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
             init_pos[:, i] *= size
         
-        #Resample points if they are in hard boundaries
-        if not any(self.hard_boundaries_geometry): pass
-
-        else:
+        init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
         
-            print('Found applied hard boundaries!')
-            print('Start resampling...')
-
-
-            check = True
-            
-            while check:
-            
-                in_bound_idx = np.array([], dtype = np.int64)
-
-                for key, geometry in self.hard_boundaries_geometry.items():
-
-                    if 'c' in key:
-
-                        in_bound_idx_key = self.check_circ_cond(pos = init_pos,
-                                                                mid = geometry[0].reshape(1, 2),
-                                                                r = geometry[1] )
-                    
-                    elif 'p' in key:
-
-                        in_bound_idx_key = self.check_square_cond(pos = init_pos,
-                                                                  Lx = geometry[4],
-                                                                  Ly = geometry[5],
-                                                                  mid = geometry[6].reshape(1, 2))  
-                    else: raise ValueError(f'Key {key} not known!') 
-
-                    in_bound_idx = np.append( in_bound_idx, in_bound_idx_key )
-
-                init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], self.dim )           
-
-                for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
-                    
-                    init_pos[ in_bound_idx , i] *= size
-                
-                if not in_bound_idx.size > 0: check = False
-
-            print('Resampling finished!')
-
+        if not any( self.hard_boundaries_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.domain_geometry)
+        else: pass
+        
         assert init_pos[:, 0].max() <= self.size_x 
         assert init_pos[:, 1].max() <= self.size_y
         if self.dim == 3: assert init_pos[:, 2].max() <= self.size_z 
@@ -187,36 +164,107 @@ class Universe(base):
         assert init_pos[:, 1].min() >= 0
         if self.dim == 3: assert init_pos[:, 2].min() >= 0
 
+        np.save(arr = init_pos, file = self.output + f"_initial_frame.npy")
+
         return init_pos
+
+    def clean_domains(self, init_pos, geometry_collection):
+
+        """
+        The function should remove initials position of particles from domains (either hard boundaries or different diffusion coefficients).
+
+        Parameters
+        ----------
+
+        init_pos := numpy.ndarray
+            Array of initial positions that should be cleaned
+        geometry_collection := dict
+            Dictionary containing information about the domains geometries
+
+        Return
+        ------
+
+        cleaned_init_pos := numpy.ndarray
+            Array of cleaned initial positions
+
+        """
+
+        #Check if there are any geometry entries
+        if not any( geometry_collection ): return init_pos
+
+        print('Found applied geometries!')
+        print('Start resampling...')
+
+        cleaned_init_pos = np.copy( init_pos )
+
+        check = True
+        
+        #Iterate as long as there are particles in domains
+        while check:
+        
+            #Init empty array to store particles indices in domains
+            in_bound_idx = np.array([], dtype = np.int64)
+
+            #Iterate over geometries
+            for key, geometry in geometry_collection.items():
+
+                #Circular domains
+                if 'c' in key:
+
+                    #Get indices of particles in circular domains
+                    in_bound_idx_key = self.check_circ_cond(pos = cleaned_init_pos,
+                                                            mid = geometry[0].reshape(1, 2),
+                                                            r   = geometry[1] )
+
+                #Rectangular domains
+                elif 'p' in key:
+
+                    #Get indices of particles in rectangular domains
+                    in_bound_idx_key = self.check_square_cond(pos = cleaned_init_pos,
+                                                              Lx  = geometry[4],
+                                                              Ly  = geometry[5],
+                                                              mid = geometry[6].reshape(1, 2))  
+                
+                else: raise ValueError(f'Key {key} not known!') 
+                
+                #Append to larger storage array
+                in_bound_idx = np.append( in_bound_idx, in_bound_idx_key )
+
+            if not ( in_bound_idx.size > 0 ): 
+                check = False
+                continue
+            
+            #Resample only particle positions inside the boundaries
+            cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], self.dim )           
+
+            #Scale the coordinates to the right size
+            for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]): cleaned_init_pos[ in_bound_idx , i] *= size
+        
+        print('Resampling finished!')
+
+        return cleaned_init_pos
+    
+    #--------------------------------------------------------------------------------------------------------------
+    # Function for the evolution of the system
 
     def forward_in_time(self):
 
-        factor = np.sqrt( 2 * self.effective_d_coeffs * self.dt ).reshape(-1, 1)
+        factor = np.sqrt( 2 * self.d_coeffs * self.dt ).reshape(-1, 1)
 
         self.displace = factor * np.random.randn( self.N, self.dim )
 
         #Move particles
         self.w_universe += self.displace
-
+    
     def apply_pbc(self):
 
         #Apply periodic boundary conditions
         for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
             self.w_universe[:, i] %= size
-
-    def generate_diffusion(self):
-
-        if type( self.d_coeffs ) == float: return np.repeat(self.d_coeffs, self.N)
-        
-        elif self.d_coeffs.ndim == 2:
-
-            grid_indices = np.int64( np.floor( self.w_universe  / self.grid ) )
-
-            return self.d_coeffs[ grid_indices[:, 0], grid_indices[:, 1] ]
-        
-        else:
-            raise ValueError("Currently I cannot handle the provided diffusion coefficients. Either enter float or 2-dimensional numpy array")
-
+    
+    #--------------------------------------------------------------------------------------------------------------
+    # Function for different geometric tasks
+    
     def apply_pbc_vector(self, vec):
 
         assert vec.ndim == 2, 'Vector has not a dimension of 2'
@@ -229,7 +277,7 @@ class Universe(base):
         vec[:, 1] = np.where(vec[:, 1] <= - self.size_y / 2, vec[:, 1] + self.size_y, vec[:, 1])
 
         return vec
-    
+
     def check_circ_cond(self, pos, mid, r):
 
         assert mid.ndim == 2, 'Middle point is not two-dimensional'
@@ -253,9 +301,254 @@ class Universe(base):
         cond_y = np.logical_and( (-Ly/2 <= squa_coor[:, 1]), (squa_coor[:, 1] <= Ly/2) )
 
         return np.where( np.logical_and(cond_x, cond_y))[0]
+    
+    #--------------------------------------------------------------------------------------------------------------
+    # Function for different geometric tasks
+
+    def update_diffusion(self):
+        
+        if not any(self.domain_geometry): pass
+
+        else:
+
+            self.d_coeffs[:] = self.base_d_coeff
+
+            for key, geometry in self.domain_geometry.items():
+
+                #Circular domains
+                if 'c' in key:
+                    
+                    #Calculate real distances
+                    #--------------------------------------------------------------------------------
+                    mid = self.domain_geometry[key][0].reshape(1,2)
+                    r   = self.domain_geometry[key][1]
+                    #--------------------------------------------------------------------------------
+
+                    index = self.check_circ_cond(pos = self.w_universe,
+                                                 mid = mid,
+                                                 r   = r)
+                    
+                    if not index.size > 0: continue
+
+                    self.d_coeffs[ index ] = self.domain_geometry[key][2]
+                
+                #Square hard boundary
+                elif 'p' in key:
+                    
+                    #Calculate real distances
+                    #--------------------------------------------------------------------------------
+                    edges = self.domain_geometry[key][0:4]
+                    Lx    = self.domain_geometry[key][4]
+                    Ly    = self.domain_geometry[key][5] 
+                    mid   = self.domain_geometry[key][6].reshape(1, 2)
+                    #--------------------------------------------------------------------------------
+                    
+                    index = self.check_square_cond(pos = self.w_universe,
+                                                   Lx = Lx,
+                                                   Ly = Ly,
+                                                   mid = mid)
+
+
+                    if not index.size > 0: continue
+                    
+                    self.d_coeffs[ index ] = self.domain_geometry[key][7]
+
+                else:
+                    raise ValueError("Currently I cannot handle the provided geometry.")
+
+    #----------------------------------------------------------------------------------------------------------------------------------------
+    #Metropolis
 
     @staticmethod
-    def calc_reflection(d, n):
+    def metropolis_decision(deltaE):
+        
+        if deltaE >= 1: return True
+        else:
+
+            p_accept = np.min( [1, deltaE ] )
+            alpha    = np.random.rand(1)[0]
+
+            if alpha < p_accept: return True
+            else: return False
+    
+    @staticmethod
+    def entropy(x):
+        return -x * np.log(x) - (1-x) * np.log(1-x)
+
+    def double_metropolis_scheme(self, index, prev_index ):
+
+        #Target fraction of lipids INSIDE domains
+        f_inside_true = self.metropolis['Inside']
+        #Note!
+        #self.in_domains contains upto now only information from the previous step and not from the current!
+
+        #Case A
+        A = self.in_domains[ index ]
+        #Case A.1 ->  TRUE: Particle was already in this domain and remains there -> Do not reflect
+        #Case A.2 -> FALSE: Particle was not in a domain and wants to enter this domain now -> METROPOLIS
+
+        #Case B
+        not_index = np.setdiff1d(ar1 = prev_index, ar2 = index) #Return the unique values in ar1 that are not in ar2.
+        B = self.in_domains[ not_index ]
+        #Case B.1 -> TRUE:  Particle wants to leave domain -> METROPOLIS
+        #Case B.2 -> FALSE: Particle stays outside domain -> Do not reflect -> That should only happen if the point in a previous iteration was allowed to leave the domain.
+        
+        entering_index = index[ ~A ] #Case A.2
+        leaving_index  = not_index[ B ] #Case B.1
+        
+        #print("Number - Entering:", len(entering_index))
+        #print("Number - Leaveing:", len(leaving_index))
+
+        index_after_metropolis = []
+
+        #-----------------------------------------------------------------------------------------------------------------------
+        #OUTSIDE -> INSIDE
+        #print('Entering:',entering_index.shape)
+        
+        #Decide for each "entering-applicant" particle independently if it is allowed to enter the domain
+        #Iterate over A.2
+        for p_index in entering_index:
+
+            f_inside_new = ( self.in_domains.sum() + 1 ) / self.N
+
+            deltaE = (f_inside_true - f_inside_new) / f_inside_new
+            #print('Entering:', deltaE)
+            
+            #Entering is accepted
+            if self.metropolis_decision(deltaE = deltaE): self.in_domains[ p_index ] = True    #Particle is in domain
+            #Entering is rejected
+            else: index_after_metropolis.append( p_index ) #Particle will get reflected
+        
+
+        #INSIDE -> OUTSIDE
+        #print('Leaving:',leaving_index.shape)
+
+        #Decide for each particle indepently if it is allowed to enter the domain
+        #Iterate over B.1
+        for p_index in leaving_index:
+
+            f_inside_new = ( self.in_domains.sum() - 1 ) / self.N
+            
+            deltaE = f_inside_new / (f_inside_new - f_inside_true)
+            #print('Leaving:', deltaE)
+
+            #Leaving is accepted
+            if self.metropolis_decision(deltaE = deltaE): self.in_domains[p_index] = False #Particle will leave domains, without a reflection
+            #Leaving is rejected
+            else: index_after_metropolis.append( p_index )
+
+        return np.array(index_after_metropolis)
+
+
+    #-----------------------------------------------------------------------------------------------------------------------------
+    #Boundaries
+    
+    def hard_boundaries(self):
+        
+        if not any(self.hard_boundaries_geometry): pass
+
+        else:
+
+            p_prev = self.w_universe - self.displace
+
+            p_prev[:, 0] %= self.size_x
+            p_prev[:, 1] %= self.size_y
+
+            for key, geometry in self.hard_boundaries_geometry.items():
+
+                #Circular hard boundary
+                if 'c' in key:
+                    
+                    #Calculate real distances
+                    #--------------------------------------------------------------------------------
+                    mid = self.hard_boundaries_geometry[key][0].reshape(1,2)
+                    r   = self.hard_boundaries_geometry[key][1]
+                    #--------------------------------------------------------------------------------
+                    
+
+                    index        = self.check_circ_cond(pos = self.w_universe, mid = mid, r = r)
+                    prev_index   = self.check_circ_cond(pos = p_prev, mid = mid, r = r)
+
+                    if any(self.metropolis): index = self.double_metropolis_scheme( index, prev_index)
+
+                    if not index.size > 0: 
+                        condition = False
+                        continue
+                    #--------------------------------------------------------------------------------
+
+                    #These are the indices of the particles that should be in the domain later on
+                    index_in_domains = index[ self.in_domains[index] ]
+
+                
+                    norm, intersection = self.get_normals_circle(points      = self.w_universe[index],
+                                                                 prev_points = p_prev[index],
+                                                                 d           = self.displace[index],
+                                                                 mid         = mid,
+                                                                 r           = r
+                                                                 )
+                    
+                    new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = p_prev[index], n = norm )
+                    
+                    if not np.all( index_in_domains == index[ self.check_circ_cond(pos = new_pos, mid = mid, r = r) ] ):
+                        print('Error points are not in circle, but are expected to be in circle!')
+
+                        print(index)
+                        print(index[ self.check_circ_cond(pos = new_pos, mid = mid, r = r) ])
+
+                        np.save(file = self.output + "_debug_p.npy", arr = new_pos)
+                        np.save(file = self.output + "_debug_p_older.npy", arr = p_prev[index])
+                        np.save(file = self.output + "_debug_p_old.npy", arr = self.w_universe[index])
+                        np.save(file = self.output + "_debug_intersection.npy", arr = intersection)
+                        raise ValueError('')
+                    
+                    self.displace[index]   = d_new
+                    self.w_universe[index] = new_pos
+                    
+
+
+
+                #Square hard boundary
+                elif 'p' in key:
+                    
+                    #Calculate real distances
+                    #--------------------------------------------------------------------------------
+                    edges = self.hard_boundaries_geometry[key][0:4]
+                    Lx    = self.hard_boundaries_geometry[key][4]
+                    Ly    = self.hard_boundaries_geometry[key][5] 
+                    mid   = self.hard_boundaries_geometry[key][6].reshape(1, 2)
+                    #--------------------------------------------------------------------------------
+                    
+                    condition = True
+
+                    while condition:
+
+                        index      = self.check_square_cond(pos = self.w_universe, Lx = Lx, Ly = Ly, mid = mid)
+                        prev_index = self.check_square_cond(pos = p_prev,          Lx = Lx, Ly = Ly, mid = mid)
+                        
+                        if any(self.metropolis): index = self.double_metropolis_scheme( index, prev_index )
+                        
+                        if not index.size > 0: 
+                            condition = False
+                            continue
+
+                        #--------------------------------------------------------------------------------
+
+                        norm, intersection = self.get_normals_polygon(points   = self.w_universe[ index ],
+                                                                      displace = self.displace[ index ],
+                                                                      edges    = edges,
+                                                                      Lx       = Lx,
+                                                                      Ly       = Ly)
+                
+                        new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = p_prev[index], n = norm )
+                
+                        p_prev[index]          = intersection
+                        self.displace[index]   = d_new
+                        self.w_universe[index] = new_pos
+                
+                else:
+                    raise ValueError("Currently I cannot handle the provided geometry.")
+            
+    def calc_reflection(self, intersection, p_prev, n):
 
         """
         Calculate reflection vector of vector d with normal n
@@ -269,8 +562,36 @@ class Universe(base):
         #Vectorized form
         #d.shape = (Nr, 2)
         #n.shape = (n , 2)
+        
+        d_new = intersection - p_prev
+        d_new = self.apply_pbc_vector(d_new)
 
-        return d - 2 * np.sum(d * n, axis = 1).reshape(-1, 1) * n
+        reflection_vector =  d_new - 2 * np.sum(d_new * n, axis = 1).reshape(-1, 1) * n
+        
+        reflection = intersection + reflection_vector
+        reflection[:, 0] %= self.size_x
+        reflection[:, 1] %= self.size_y
+
+        #----------------------------------------------------
+        #Test reflection
+        pos_p_prev = -1 * d_new
+        pos_ref    = self.apply_pbc_vector(reflection_vector)
+
+        dot_pp = np.sum(pos_p_prev  * n, axis = 1)
+        dot_pr = np.sum(pos_ref     * n, axis = 1)
+
+        dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
+        dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
+
+        assert np.allclose(dot_pr, dot_pp), "In angle is not equal out angle"
+        assert np.allclose(dot_pp, dot_pr), "In angle is not equal out angle"
+        #----------------------------------------------------
+
+        return reflection, reflection_vector
+    
+
+    #---------------------------------------------------------------------------------------------------------------------
+    #Normal calculation
 
     def get_normals_circle(self, prev_points, points, d, mid, r):
 
@@ -333,6 +654,7 @@ class Universe(base):
         check = p_inter2 + prev_inter2 + 2 * np.sqrt(p_inter2 * prev_inter2)
 
         if not np.all( np.abs(check - prev_d2) < 1E-8 ):
+
             print(lam1, lam2)
             print(lam)
             print('A',A)
@@ -358,12 +680,19 @@ class Universe(base):
 
         if not np.all( np.abs(dist2mid - r) < 1E-8 ):
 
-            print("Something went wrong. Write debug files!")
-            np.save(arr = prev_points, file = 'prev_positions.debug.npy')
-            np.save(arr = points,      file = 'positions.debug.npy')
-            np.save(arr = d,           file = 'displace.debug.npy')
+            points_dist      = ( np.linalg.norm( self.apply_pbc_vector(points - mid), axis = 1) - r      ) 
+            prev_points_dist = ( np.linalg.norm( self.apply_pbc_vector(prev_points - mid), axis = 1) - r )
 
-            raise ValueError('Intersection is not on circle!')
+            if np.all( (points_dist * prev_points_dist) < 0 ): pass
+            else:
+
+                print("Something went wrong. Write debug files!")
+                np.save(arr = intersection, file = 'intersection.debug.npy')
+                np.save(arr = prev_points, file = 'prev_positions.debug.npy')
+                np.save(arr = points,      file = 'positions.debug.npy')
+                np.save(arr = d,           file = 'displace.debug.npy')
+
+                raise ValueError('Intersection is not on circle!')
         
         #-------------------------------------
 
@@ -395,8 +724,6 @@ class Universe(base):
         t = self.perpDot(c , vert) / self.perpDot(d, vert)
 
         intersection = p + t.reshape(-1, 1) * d
-
-        intersection = self.apply_pbc_vector(intersection)
 
         #----------------------------------------------------------
         true_intersection = np.ones( p.shape[0] , dtype = bool)
@@ -440,8 +767,13 @@ class Universe(base):
         cond = np.abs(check - prev_p2) >= 1E-8
         
         true_intersection[ cond ] = False
-        #print(true_intersection)
         #---------------------------------------------------------
+        
+        cond = np.abs( np.sqrt(prev_inter2) ) <= 1E-8
+        true_intersection[ cond ] = False
+
+
+
         """
         p_to_intersection = intersection - p
         p_to_intersection = self.apply_pbc_vector(p_to_intersection)
@@ -460,7 +792,7 @@ class Universe(base):
 
         return intersection, true_intersection, vert
 
-    def get_normals_polyon(self, points, displace, edges, Lx, Ly):
+    def get_normals_polygon(self, points, displace, edges, Lx, Ly):
 
         """
         Get the normal vector of a two dimensional two dimension polygon for a point
@@ -505,6 +837,7 @@ class Universe(base):
 
             norm[~true_intersection] = np.array([0.0, 0.0])
 
+
             final_norm += norm
             final_intersection += intersection
 
@@ -524,161 +857,13 @@ class Universe(base):
         if not np.all( np.abs( len_norm - 1.) < 1E-8):
             np.save(arr = points, file = 'debug_points.npy')
             np.save(arr = displace, file = 'debug_displace.npy')
+            np.save(arr = final_intersection, file = 'debug_intersection.npy')
 
             raise ValueError("Normals are not normalized! Saved actual states as debug_points.npy and debug_displace.npy!")
 
         return final_norm, final_intersection
 
     
-    def hard_boundaries(self):
-        
-        if not any(self.hard_boundaries_geometry): pass
-
-        else:
-
-            for key, geometry in self.hard_boundaries_geometry.items():
-
-                #Circular hard boundary
-                if 'c' in key:
-                    
-                    #Calculate real distances
-                    #--------------------------------------------------------------------------------
-                    mid = self.hard_boundaries_geometry[key][0].reshape(1,2)
-                    r   = self.hard_boundaries_geometry[key][1]
-                    #--------------------------------------------------------------------------------
-
-                    index = self.check_circ_cond(pos = self.w_universe,
-                                                 mid = mid,
-                                                 r   = r)
-                    
-                    if not index.size > 0: continue
-
-                    p_prev = self.w_universe[index] - self.displace[index]
-
-                    p_prev[:, 0] %= self.size_x
-                    p_prev[:, 1] %= self.size_y
-                    
-                    test_index = self.check_circ_cond(pos = p_prev,
-                                                      mid = mid,
-                                                      r   = r)
-
-                    assert not test_index.size > 0, 'Points already in circle'
-
-                    #--------------------------------------------------------------------------------
-        
-                
-                    norm, intersection = self.get_normals_circle(points      = self.w_universe[index],
-                                                                 prev_points = p_prev,
-                                                                 d           = self.displace[index],
-                                                                 mid         = mid,
-                                                                 r           = r
-                                                                 )
-                    d_new = intersection - p_prev
-                    d_new = self.apply_pbc_vector(d_new)
-                    
-                    reflected = self.calc_reflection(d = d_new,
-                                                     n = norm 
-                                                    )
-                    
-                    new_pos = intersection + reflected
-                    new_pos[:, 0] %= self.size_x
-                    new_pos[:, 1] %= self.size_y
-
-
-                    #----------------------------------------------------------------------------------
-                    #Testing
-                    real_dist_new = (new_pos - mid)
-                    real_dist_new = self.apply_pbc_vector(real_dist_new)
-                    real_dist_new = np.linalg.norm(real_dist_new, axis = 1)
-                    
-                    assert np.all(real_dist_new > r), 'Not all new positions are outside the circle'
-                    
-                    #TODO Make it applicable for PBC
-
-                    pos_p_prev = p_prev - intersection
-                    pos_p_prev = self.apply_pbc_vector(pos_p_prev)
-                    pos_ref    = self.apply_pbc_vector(reflected)
-
-                    dot_pp = np.sum(pos_p_prev  * norm, axis = 1)
-                    dot_pr = np.sum(pos_ref * norm, axis = 1)
-
-                    dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
-                    dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
-
-                    assert np.allclose(dot_pr, dot_pp), "In angle is not equal out angle"
-                    assert np.allclose(dot_pp, dot_pr), "In angle is not equal out angle"
-                    #----------------------------------------------------------------------------------
-
-                    self.w_universe[index] = new_pos
-
-                #Square hard boundary
-                if 'p' in key:
-                    
-                    #Calculate real distances
-                    #--------------------------------------------------------------------------------
-                    edges = self.hard_boundaries_geometry[key][0:4]
-                    Lx    = self.hard_boundaries_geometry[key][4]
-                    Ly    = self.hard_boundaries_geometry[key][5] 
-                    mid   = self.hard_boundaries_geometry[key][6].reshape(1, 2)
-                    #--------------------------------------------------------------------------------
-                    
-                    index = self.check_square_cond(pos = self.w_universe,
-                                                   Lx = Lx,
-                                                   Ly = Ly,
-                                                   mid = mid)
-
-
-                    if not index.size > 0: continue
-
-                    p_prev = self.w_universe[index] - self.displace[index]
-
-                    p_prev[:, 0] %= self.size_x
-                    p_prev[:, 1] %= self.size_y
-
-                    test_index = self.check_square_cond(pos = p_prev,
-                                                         Lx = Lx,
-                                                         Ly = Ly,
-                                                        mid = mid)
-                    
-                    assert not test_index.size > 0, 'Points already in square'
-                    #--------------------------------------------------------------------------------
-    
-                    norm, intersection = self.get_normals_polyon(points = self.w_universe[ index ],
-                                                               displace = self.displace[ index ],
-                                                                 edges  = edges,
-                                                                     Lx = Lx,
-                                                                     Ly = Ly
-                                                                 )
-                
-                    d_new = intersection - p_prev
-                    d_new = self.apply_pbc_vector(d_new)
-
-                    reflected = self.calc_reflection(d = d_new,
-                                                     n = norm 
-                                                     )
-                    
-                    new_pos = intersection + reflected
-                    new_pos[:, 0] %= self.size_x
-                    new_pos[:, 1] %= self.size_y
-                    #----------------------------------------------------------------------------------
-                    #Testing
-
-                    pos_p_prev = p_prev - intersection
-                    pos_p_prev = self.apply_pbc_vector(pos_p_prev)
-                    
-                    pos_ref    = self.apply_pbc_vector(reflected)
-
-                    dot_pp = np.sum(pos_p_prev  * norm, axis = 1)
-                    dot_pr = np.sum(pos_ref * norm, axis = 1)
-
-                    dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
-                    dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
-
-                    assert np.allclose(dot_pr, dot_pp), "In angle is not equal out angle"
-                    assert np.allclose(dot_pp, dot_pr), "In angle is not equal out angle"
-                    #----------------------------------------------------------------------------------
-                    
-                    self.w_universe[index] = new_pos
                     
 
     #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -731,7 +916,7 @@ class Universe(base):
                 pass
 
         #Validation
-        #assert self.w_storage.shape[0] == (self.nsteps // self.nstxout) + 1, "Number of frames is not correct!"
+        assert self.w_storage.shape[0] == (self.nsteps // self.nstxout) + 1, "Number of frames is not correct!"
 
         assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout ), "Time step distance is not as expected!"
         assert np.allclose( self.dt * self.nstxout, np.diff( self.time_array ) ), "Time step distance is not as expected!"

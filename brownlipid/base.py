@@ -20,6 +20,7 @@ class base:
                     base_d_coeff:                    float = 1.,
                          domains:                     dict = {},
                  hard_boundaries:                     dict = {},
+                      metropolis:                     dict = {},
                           output:                      str = 'output'
 
                 ):
@@ -36,6 +37,7 @@ class base:
         self.nstchk       = nstchk
         self.base_d_coeff = base_d_coeff
         self.output       = output
+        self.metropolis   = metropolis
 
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
@@ -45,8 +47,12 @@ class base:
         assert self.nsteps % self.nstchk  == 0, "Frequency of checkpoints (nstchk) must be multiple of number of steps!"
         assert self.nstchk % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of frequency of checkpoints (nstchk)!"
 
-        #Init domains
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #Init Domains with different diffusion coefficients
+
         if any( domains ):
+
+            self.domain_geometry = {}
 
             for key, geometries in domains.items():
 
@@ -54,16 +60,25 @@ class base:
 
                     for i, geometry in enumerate(geometries):
 
-                        domains[f"c{i}"] = [np.array([geometry[1], geometry[2]]), geometry[0]]
+                        diff_coeff = geometry[0]
+                        r          = geometry[1]
+                        mx         = geometry[2]
+                        my         = geometry[3]
+
+                        self.domain_geometry[f"c{i}"] = [np.array([mx, my]), r, diff_coeff]
 
                 elif key == 'Rectangle':
                     
                     for i, geometry in enumerate(geometries):
 
-                        mx = geometry[0]
-                        my = geometry[1]
-                        Lx = geometry[2]
-                        Ly = geometry[3]
+                        diff_coeff = geometry[0]
+                        mx         = geometry[1]
+                        my         = geometry[2]
+                        Lx         = geometry[3]
+                        Ly         = geometry[4]
+
+                        assert Lx >= self.size_x / 2, 'Rectangle edge is larger than half the box length in x that can lead to problems!'
+                        assert Ly >= self.size_y / 2, 'Rectangle edge is larger than half the box length in y that can lead to problems!'
 
                         #Generate rectangle edges clockwise
                         #Increase rectangle slightly in positive x- and y-direction
@@ -76,11 +91,19 @@ class base:
                         
                         domains[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
                         
-                        domains[f"p{i}"].append( Lx )
-                        domains[f"p{i}"].append( Ly )
-                        domains[f"p{i}"].append( np.array( [ mx, my ] ) )
+                        #Append the rest of the domain information
+                        self.domain_geometry[f"p{i}"].append( Lx )
+                        self.domain_geometry[f"p{i}"].append( Ly )
+                        self.domain_geometry[f"p{i}"].append( np.array( [ mx, my ] ) )
+                        self.domain_geometry[f"p{i}"].append(diff_coeff )
         
-        else: self.d_coeffs = base_d_coeff
+        else:
+            self.domain_geometry = {}
+        
+        self.d_coeffs = np.ones( self.N ) * base_d_coeff
+        
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #Init Domains with hard boundary conditions
 
         if any( hard_boundaries ):
 
@@ -124,7 +147,20 @@ class base:
 
             self.hard_boundaries_geometry = hard_boundaries_geometry
 
-        else: self.hard_boundaries_geometries = {}
+        else: self.hard_boundaries_geometry = {}
+        
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #Initialize for metropolis steps
+        if any(self.metropolis):
+            x = self.metropolis['Inside']
+            self.metropolis['Entropy'] = - (x * np.log(x) + (1 - x) * np.log( 1 - x))
+
+        self.in_domains = np.zeros( self.N, dtype = bool ) 
+
+        self.total_index = np.arange( self.N )
+
+    #--------------------------------------------------------------------------------------------------------------------------------------------------------------
+    #Define functions
     
     def base_apply_pbc_vector(self, vec):
 
