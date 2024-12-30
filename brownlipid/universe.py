@@ -317,6 +317,9 @@ class Universe(base):
         #Calculate the displace vector
         self.displace = factor * np.random.randn( self.N, self.dim )
 
+        #Store previous positions
+        self.w_universe_prev = np.copy( self.w_universe )
+
         #Move particles
         self.w_universe += self.displace
     
@@ -578,7 +581,7 @@ class Universe(base):
 
         #Some tests
         assert np.all( B ) == True, 'That should not happen with circles! - 1'
-        assert np.all( leaving_index, not_index), 'That should not happen with circles! - 2'
+        assert np.all( leaving_index == not_index), 'That should not happen with circles! - 2'
         
         #Init empty list to collect indices of particles with rejected Metropolis Step
         index_after_metropolis = []
@@ -645,6 +648,9 @@ class Universe(base):
             p_prev[:, 0] %= self.size_x
             p_prev[:, 1] %= self.size_y
 
+            assert np.allclose( self.w_universe_prev, p_prev ), 'Quick check!'
+            assert np.allclose( p_prev, self.w_universe_prev ), 'Quick check!'
+
             #---------------------------------------------------------------------------------------
             #Iterate over stored geometries
             for key, geometry in self.hard_boundaries_geometry.items():
@@ -657,12 +663,12 @@ class Universe(base):
                     mid = self.hard_boundaries_geometry[key][0].reshape(1,2)
                     r   = self.hard_boundaries_geometry[key][1]
                     
-                    index        = self.check_circ_cond(pos = self.w_universe, mid = mid, r = r)
-                    prev_index   = self.check_circ_cond(pos = p_prev, mid = mid, r = r)
+                    index        = self.check_circ_cond(pos = self.w_universe     , mid = mid, r = r)
+                    prev_index   = self.check_circ_cond(pos = self.w_universe_prev, mid = mid, r = r)
                     
                     #--------------------------------------------------------------------------------
                     #Perform Metropolis step if required
-                    if any(self.metropolis): index = self.double_metropolis_scheme( index, prev_index)
+                    if any(self.metropolis): index = self.double_metropolis_scheme( index = index, prev_index = prev_index)
 
                     #--------------------------------------------------------------------------------
                     #Check if particles are reflected
@@ -675,13 +681,13 @@ class Universe(base):
 
                     #Calculate normals and intersection with the circular boundary
                     norm, intersection = self.get_normals_circle(points      = self.w_universe[index],
-                                                                 prev_points = p_prev[index],
+                                                                 prev_points = self.w_universe_prev[index],
                                                                  d           = self.displace[index],
                                                                  mid         = mid,
                                                                  r           = r
                                                                  )
                     
-                    new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = p_prev[index], n = norm )
+                    new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = self.w_universe_prev[index], n = norm )
                     
                     if not np.all( index_in_domains == index[ self.check_circ_cond(pos = new_pos, mid = mid, r = r) ] ):
                         print('Error points are not in circle, but are expected to be in circle!')
@@ -689,9 +695,9 @@ class Universe(base):
                         print(index)
                         print(index[ self.check_circ_cond(pos = new_pos, mid = mid, r = r) ])
 
-                        np.save(file = self.output + "_debug_p.npy", arr = new_pos)
-                        np.save(file = self.output + "_debug_p_older.npy", arr = p_prev[index])
-                        np.save(file = self.output + "_debug_p_old.npy", arr = self.w_universe[index])
+                        np.save(file = self.output + "_debug_p.npy"           , arr = new_pos)
+                        np.save(file = self.output + "_debug_p_older.npy"     , arr = self.w_universe_prev[index])
+                        np.save(file = self.output + "_debug_p_old.npy"       , arr = self.w_universe[index])
                         np.save(file = self.output + "_debug_intersection.npy", arr = intersection)
                         raise ValueError('')
                     
