@@ -522,12 +522,43 @@ class Universe(base):
 
     def double_metropolis_scheme(self, index, prev_index ):
 
+        """
+        Function calls Metropolis Algorithm to decide:
+
+        A) Particle entering a domain
+        B) Particle leaving a domain
+
+        The implemention distinguish between four cases for each particle:
+
+                               __ A.1 Particle was already in domain in the step before -> Particle remains in domain
+                              /
+        A) Particle in domain 
+                              \__ A.2 Particle was not in domain in the step before -> Particle wants to enter domain -> Metropolis
+
+                                  __ B.1 Particle was already in domain in the step before -> Particle wants to leave domain -> Metropolis
+                                 /
+        B) Particle not in domain
+                                 \__ B.2 Particle was not in domain in the step before -> Particle stays outside
+
+        The array self.in_domains contains information about the assignment of particles to domains in the previous step, but not about
+        the current. self.in_domains is updated during this function.
+
+        Parameters
+        ----------
+        index := numpy.ndarray
+            Index of particles in the domain in the current step
+        prev_index := numpy.ndarray
+            Index of particles in the domain in the previous step
+
+        Returns
+        -------
+        index_after_metropolis := numpy.ndarray
+            Index of particles which Metropolis step got rejected. Array is further used for reflection.
+
+        """
+        
         #Target fraction of lipids INSIDE domains
         #f_inside_true  = self.metropolis['Inside']
-        #ratio_true     = self.metropolis['Ratio']
-        #f_outside_true = self.metropolis['Outside']
-        #Note!
-        #self.in_domains contains upto now only information from the previous step and not from the current!
 
         #Case A
         A = self.in_domains[ index ]
@@ -540,17 +571,20 @@ class Universe(base):
         #Case B.1 -> TRUE:  Particle wants to leave domain -> METROPOLIS
         #Case B.2 -> FALSE: Particle stays outside domain -> Do not reflect -> That should only happen if the point in a previous iteration was allowed to leave the domain.
         
+
+        #Sort particles for which Metropolis must be called
         entering_index = index[ ~A ] #Case A.2
         leaving_index  = not_index[ B ] #Case B.1
-        
-        #print("Number - Entering:", len(entering_index))
-        #print("Number - Leaveing:", len(leaving_index))
 
+        #Some tests
+        assert np.all( B ) == True, 'That should not happen with circles! - 1'
+        assert np.all( leaving_index, not_index), 'That should not happen with circles! - 2'
+        
+        #Init empty list to collect indices of particles with rejected Metropolis Step
         index_after_metropolis = []
 
         #-----------------------------------------------------------------------------------------------------------------------
         #OUTSIDE -> INSIDE
-        #print('Entering:',entering_index.shape)
         
         #Decide for each "entering-applicant" particle independently if it is allowed to enter the domain
         #Iterate over A.2
@@ -559,9 +593,7 @@ class Universe(base):
             #x_old = self.in_domains.sum()     
             #x_new = self.in_domains.sum() + 1
             #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, area = self.total_area_domains, f_true = f_inside_true, forceconstant = self.fconstant)
-            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = f_inside_true, forceconstant = self.fconstant)
             #deltaE = self.get_delta_E_v2(x_old = x_old, x_new = x_new, N = self.N, r_true = ratio_true, forceconstant = self.fconstant)
-            #if self.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = True    #Particle is in domain
             
             #Entering is accepted
             if self.simple_metropolis_decision(energy_barrier_height = self.barrier, RT = self.RT): self.in_domains[ p_index ] = True
@@ -570,7 +602,6 @@ class Universe(base):
         
 
         #INSIDE -> OUTSIDE
-        #print('Leaving:',leaving_index.shape)
 
         #Decide for each particle indepently if it is allowed to enter the domain
         #Iterate over B.1
@@ -579,9 +610,6 @@ class Universe(base):
             #x_old = self.in_domains.sum()     
             #x_new = self.in_domains.sum() - 1
             #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, area = self.total_area_domains, f_true = f_inside_true, forceconstant = self.fconstant)
-            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = f_inside_true, forceconstant = self.fconstant)
-            #deltaE = self.get_delta_E_v2(x_old = x_old, x_new = x_new, N = self.N, r_true = ratio_true, forceconstant = self.fconstant)
-            #if self.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[p_index] = False #Particle will leave domains, without a reflection
             
             #Leaving is accepted
             if self.simple_metropolis_decision(energy_barrier_height = self.barrier, RT = self.RT): self.in_domains[ p_index ] = False
@@ -595,42 +623,57 @@ class Universe(base):
     #Boundaries
     
     def hard_boundaries(self):
+
+        """
+        Function to handle domains with hard boundaries.
+        For particles crossing such a boundary, either to leave or to enter a domain, a Metropolis step is performed.
+        If accepted, the particle is allowed to cross the boundary.
+        If rejected, the particle is reflected depending on the geometry of the domain. 
+
+
+        """
         
+        #If called but no geometry for a domain is stored
         if not any(self.hard_boundaries_geometry): pass
 
         else:
 
+            #---------------------------------------------------------------------------------------
+            #For some steps the coordinates of the previous step are required
             p_prev = self.w_universe - self.displace
 
             p_prev[:, 0] %= self.size_x
             p_prev[:, 1] %= self.size_y
 
+            #---------------------------------------------------------------------------------------
+            #Iterate over stored geometries
             for key, geometry in self.hard_boundaries_geometry.items():
 
                 #Circular hard boundary
                 if 'c' in key:
                     
-                    #Calculate real distances
                     #--------------------------------------------------------------------------------
+                    #Calculate real distances
                     mid = self.hard_boundaries_geometry[key][0].reshape(1,2)
                     r   = self.hard_boundaries_geometry[key][1]
-                    #--------------------------------------------------------------------------------
                     
-
                     index        = self.check_circ_cond(pos = self.w_universe, mid = mid, r = r)
                     prev_index   = self.check_circ_cond(pos = p_prev, mid = mid, r = r)
-
+                    
+                    #--------------------------------------------------------------------------------
+                    #Perform Metropolis step if required
                     if any(self.metropolis): index = self.double_metropolis_scheme( index, prev_index)
 
-                    if not index.size > 0: 
-                        condition = False
-                        continue
                     #--------------------------------------------------------------------------------
-
-                    #These are the indices of the particles that should be in the domain later on
+                    #Check if particles are reflected
+                    if not index.size > 0: continue
+                    
+                    #--------------------------------------------------------------------------------
+                    #Calculate reflection
+                    #These are the indices of the particles that are reflected on the inside of the domain
                     index_in_domains = index[ self.in_domains[index] ]
 
-                
+                    #Calculate normals and intersection with the circular boundary
                     norm, intersection = self.get_normals_circle(points      = self.w_universe[index],
                                                                  prev_points = p_prev[index],
                                                                  d           = self.displace[index],
@@ -652,12 +695,10 @@ class Universe(base):
                         np.save(file = self.output + "_debug_intersection.npy", arr = intersection)
                         raise ValueError('')
                     
-                    self.displace[index]   = d_new
+                    #Update positions
                     self.w_universe[index] = new_pos
                     
-
-
-
+                #TODO: Check polygon reflection
                 #Square hard boundary
                 elif 'p' in key:
                     
@@ -747,30 +788,45 @@ class Universe(base):
     def get_normals_circle(self, prev_points, points, d, mid, r):
 
         """
-        Calculate the normal vector of a two dimensional circle for a point
+        Calculate normal vector of a two dimensional circle for a point, and the intersection with the circular boundary.
 
+        The required normal vector here is the vector from the circle midpoint to the intersection point, where the particle gets reflected.
+
+        The intersection is calculated solving the linear equation:
+
+            || M + d * lambda || = r
+
+        , where M is the directional vector between the circle midpoint and the previous position; d is the displacement vector between the previous
+        and the current position; lambda is a scale factor for the displacement vector; and r is the radius of the circle.
+        The linear equation has two solutions. Here, always the smaller value of lambda is assumed to be the required value.
+
+        Parameters
+        ----------
         points := numpy.ndarray
             coordinates of reflected points
         prev_points := numpy.ndarray
             previous coordinates of reflected points
         d := numpy.ndarray
             displace vector
+        mid := numpy.ndarray
+            circle midpoint
         r := float
             radius of the circle
         
         """
 
+        #Previous and current positions -> both are wrapped!
         prev_points = prev_points.reshape(-1,2)
         points      = points.reshape(-1,2)
 
         #-------------------------------------
+        #Solve linear equation
         M = (prev_points - mid)
         M = self.apply_pbc_vector(M)
-        #-------------------------------------
+        
         A = d[:, 0]**2 + d[:, 1]**2
         B = M[:, 0] * d[:, 0] + M[:, 1] * d[:, 1]
         C = M[:, 0]**2 + M[:, 1]**2
-        #-------------------------------------
 
         lam1 = 2 * B + 2 * np.sqrt(B**2 - A * ( C - r**2 ) )
         lam1 /= 2 * A
@@ -782,25 +838,29 @@ class Universe(base):
         lam = lam.reshape(-1, 1)
         
         assert lam.shape[0] == points.shape[0], 'Lambda has the wrong shape'
-
-        #-------------------------------------
+        
+        #Calculate intersection
         intersection = prev_points + lam * d
         intersection[:, 0] %= self.size_x
         intersection[:, 1] %= self.size_y
-        
-        #Check if intersection is between old positions and new positions
 
+        #-------------------------------------
+        #Check if intersection is between old positions and new positions
+        #The following code checks if the intersection is located on the shortest vector between the previous and the
+        #current position based on the smallest image convention.
+
+        #Vector from current positions to intersection
         p_inter = intersection - points
         p_inter = self.apply_pbc_vector(p_inter)
         
+        #Vector from previous positions to intersection
         prev_inter = intersection - prev_points
         prev_inter = self.apply_pbc_vector(prev_inter)
 
-        d = self.apply_pbc_vector(d)
-
+        #Using squares and Pythagoras Theorem
         p_inter2    = np.sum(   (p_inter)**2, axis = 1)
         prev_inter2 = np.sum((prev_inter)**2, axis = 1)
-        prev_d2      = np.sum(d**2, axis = 1)
+        prev_d2     = np.sum(           d**2, axis = 1)
 
         check = p_inter2 + prev_inter2 + 2 * np.sqrt(p_inter2 * prev_inter2)
 
@@ -822,18 +882,21 @@ class Universe(base):
 
             raise ValueError('Intersection is not between positions!')
 
+        #-------------------------------------
         #Check if intersection is on circle boundary
-
+        #Calculate distance between intersection and circle midpoint
         dist2mid = intersection - mid
         dist2mid = self.apply_pbc_vector( dist2mid )
-
         dist2mid = np.linalg.norm(dist2mid, axis = 1)
 
+        #Check for deviations
         if not np.all( np.abs(dist2mid - r) < 1E-8 ):
 
-            points_dist      = ( np.linalg.norm( self.apply_pbc_vector(points - mid), axis = 1) - r      ) 
-            prev_points_dist = ( np.linalg.norm( self.apply_pbc_vector(prev_points - mid), axis = 1) - r )
+            #Take numerical inaccuracies into account
+            points_dist      = np.linalg.norm( self.apply_pbc_vector(     points - mid), axis = 1) - r
+            prev_points_dist = np.linalg.norm( self.apply_pbc_vector(prev_points - mid), axis = 1) - r
 
+            #If current and previous positions are on different sides of the circle boundary any devation is accepted
             if np.all( (points_dist * prev_points_dist) < 0 ): pass
             else:
 
@@ -846,11 +909,13 @@ class Universe(base):
                 raise ValueError('Intersection is not on circle!')
         
         #-------------------------------------
-
+        #Calculate normal vector
         norm = intersection - mid
+
         #Apply PBC
         norm = self.apply_pbc_vector(norm)
-
+        
+        #Normalize
         norm /= np.linalg.norm( norm, axis = 1).reshape(-1, 1)
 
         return norm, intersection
