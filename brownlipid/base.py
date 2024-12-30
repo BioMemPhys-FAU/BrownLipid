@@ -21,6 +21,7 @@ class base:
                          domains:                     dict = {},
                  hard_boundaries:                     dict = {},
                       metropolis:                     dict = {},
+                            temp:                    float = 295,
                           output:                      str = 'output'
 
                 ):
@@ -38,6 +39,7 @@ class base:
         self.base_d_coeff = base_d_coeff
         self.output       = output
         self.metropolis   = metropolis
+        self.temp         = temp
 
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
@@ -108,6 +110,8 @@ class base:
         if any( hard_boundaries ):
 
             hard_boundaries_geometry = {}
+
+            self.total_area_domains = 0
             
             for key, geometries in hard_boundaries.items():
 
@@ -115,11 +119,17 @@ class base:
 
                     for i, geometry in enumerate(geometries):
 
+                        mx = geometry[1]
+                        my = geometry[2]
+                        r  = geometry[0]
 
-                        hard_boundaries_geometry[f"c{i}"] = [np.array([geometry[1],
-                                                                       geometry[2]]),
-                                                                       geometry[0]
+
+                        hard_boundaries_geometry[f"c{i}"] = [np.array([mx,
+                                                                       my]),
+                                                                       r
                                                              ]
+
+                        self.total_area_domains += np.pi * r**2
 
                 elif key == 'Rectangle':
                     
@@ -144,6 +154,8 @@ class base:
                         hard_boundaries_geometry[f"p{i}"].append( Lx )
                         hard_boundaries_geometry[f"p{i}"].append( Ly )
                         hard_boundaries_geometry[f"p{i}"].append( np.array( [ mx, my ] ) )
+                        
+                        self.total_area_domains += Lx * Ly
 
             self.hard_boundaries_geometry = hard_boundaries_geometry
 
@@ -152,8 +164,36 @@ class base:
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #Initialize for metropolis steps
         if any(self.metropolis):
-            x = self.metropolis['Inside']
-            self.metropolis['Entropy'] = - (x * np.log(x) + (1 - x) * np.log( 1 - x))
+
+            #Fill metropolis dictionary
+            #f = self.metropolis['Inside']
+
+            #self.metropolis['Inside']  = (     f * self.N) / self.total_area_domains
+            #self.metropolis['Outside'] = ( (1-f) * self.N) / ((self.size_x * self.size_y) - self.total_area_domains)
+            self.barrier =  self.metropolis['Barrier']
+            #Boltzmann factor (kJ/mol)
+            self.RT = 8.3145 * 1E-3 * self.temp
+            """
+            fin = self.metropolis['Inside']
+            fout = 1. - fin
+
+            self.metropolis['Ratio'] = fin / fout
+
+            #Calculate force constant for spring potential
+
+
+            sigma = self.fluctuations / 2
+
+            self.fconstant = self.RT / (sigma)**2 
+
+
+            print('Metropolis Algorithm was requested!')
+            print('Temperature:', self.temp)
+            print('Domain Ratio:', self.metropolis['Ratio'])
+            #print('Target density outside domains:', self.metropolis['Outside'])
+            print('Force constant (kJ/mol/nm^2):',  self.fconstant)
+            print('Fluctuations:', self.fluctuations)
+            """
 
         self.in_domains = np.zeros( self.N, dtype = bool ) 
 

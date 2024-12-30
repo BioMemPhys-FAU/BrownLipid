@@ -103,7 +103,7 @@ class Universe(base):
                 #Fill storage arrays
 
                 #Current frame index in the current checkpoint file
-                chk_frame_index = ( ( (i-1) // self.nstxout) % nstchk_frames ) + self.heaviside(x = i, treshold = self.nstchk)
+                chk_frame_index = ( ( (i-1) // self.nstxout) % nstchk_frames ) + self.heaviside(x = i, threshold = self.nstchk)
                 
                 w_storage[ chk_frame_index, :, : ] = self.w_universe
                 u_storage[ chk_frame_index, :, : ] = self.u_universe
@@ -135,10 +135,32 @@ class Universe(base):
                     
                     f_inside = np.zeros(  (nstchk_frames, self.N), dtype = np.float32 )
     
-    @staticmethod
-    def heaviside(x, treshold):
+        print("Your simulation terminated successfully!")
+        print("Have a nice day and thanks for the fish! :-)")
 
-        if x <= treshold: return 1
+    @staticmethod
+    def heaviside(x, threshold):
+
+        """
+        Custom Heaviside Function.
+        Returns 1, if x is smaller or equal than the threshold.
+        Returns 0, if x is greater than the threshold.
+        
+        Parameters
+        ----------
+
+        x := float
+            Float that is evaluated
+        threshold := float
+            Float that is used a constant for the evaluation
+
+        Returns
+        -------
+
+        int := 0 or 1
+        """
+
+        if x <= threshold: return 1
         else: return 0
 
     #--------------------------------------------------------------------------------------------------------------
@@ -146,16 +168,38 @@ class Universe(base):
 
     def populate_universe_uniform(self):
 
+        """
+        Generate an initial distribution of particles in the box.
+        The function takes soft or hard domains into account and removes particle from this area, and resamples it.
+
+        Returns
+        -------
+
+        init_pos := numpy.ndarray
+            Array storing the initial positions of the universe.
+
+        """
+
+        #----------------------------------------------------------------------------------------------------------
+        #Standard Workflow
+        #Sample particle positions from random uniform distribution
         init_pos = np.random.rand( self.N, self.dim )
         
-        for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
-            init_pos[:, i] *= size
+        #Scale the coordinates according to the box lengths
+        for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]): init_pos[:, i] *= size
         
+        #----------------------------------------------------------------------------------------------------------
+        #Clean restricted areas
+        #Take care of domains with hard boundaries
         init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
         
+        #If there are no hard boundaries, then take care of domains with different diffusion coefficients
         if not any( self.hard_boundaries_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.domain_geometry)
+        #If there are no type of domains just pass
         else: pass
         
+        #----------------------------------------------------------------------------------------------------------
+        #Make some tests if the particle coordinates are in the box
         assert init_pos[:, 0].max() <= self.size_x 
         assert init_pos[:, 1].max() <= self.size_y
         if self.dim == 3: assert init_pos[:, 2].max() <= self.size_z 
@@ -164,6 +208,8 @@ class Universe(base):
         assert init_pos[:, 1].min() >= 0
         if self.dim == 3: assert init_pos[:, 2].min() >= 0
 
+        #----------------------------------------------------------------------------------------------------------
+        #Save the initial frame to disk
         np.save(arr = init_pos, file = self.output + f"_initial_frame.npy")
 
         return init_pos
@@ -189,7 +235,7 @@ class Universe(base):
 
         """
 
-        #Check if there are any geometry entries
+        #Check if there are no geometry entries
         if not any( geometry_collection ): return init_pos
 
         print('Found applied geometries!')
@@ -233,6 +279,8 @@ class Universe(base):
             if not ( in_bound_idx.size > 0 ): 
                 check = False
                 continue
+
+            print(f"There are {in_bound_idx.shape[0]} particles that need to be resampled! Please stay patienced!")
             
             #Resample only particle positions inside the boundaries
             cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], self.dim )           
@@ -240,7 +288,8 @@ class Universe(base):
             #Scale the coordinates to the right size
             for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]): cleaned_init_pos[ in_bound_idx , i] *= size
         
-        print('Resampling finished!')
+        print('Resampling finished! :-)')
+        print('Good luck with your simulations!')
 
         return cleaned_init_pos
     
@@ -249,8 +298,23 @@ class Universe(base):
 
     def forward_in_time(self):
 
+        """
+        Displace particle positions according to the Brown's Diffusion.
+        For each particle and for every dimensions a random number from a standard normal distribution is drawn.
+        The random number is then scaled by a factor taking a diffusion coefficient into account:
+
+            sqrt( 2 * D * dt) (1)
+
+        Equation 1 takes the diffusion coefficient (D) and the time step (dt) of the simulation.
+
+        In this implementation D is an array (self.d_coeffs) that stores the diffusion coefficient of every particle.
+        The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
+        """
+
+        #Calculate the factor for every particle.
         factor = np.sqrt( 2 * self.d_coeffs * self.dt ).reshape(-1, 1)
 
+        #Calculate the displace vector
         self.displace = factor * np.random.randn( self.N, self.dim )
 
         #Move particles
@@ -258,7 +322,15 @@ class Universe(base):
     
     def apply_pbc(self):
 
-        #Apply periodic boundary conditions
+        """
+        Periodic boundary conditions for POSITIONAL VECTORS a.k.a. POINTS.
+
+        Particles leaving the box on one site, enter the box again from the opposite site.
+        Since, a simple rectangular box shape is used as unit cell the modulo operator is applied here.
+
+        """
+
+        #Apply periodic boundary conditions for every dimension
         for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
             self.w_universe[:, i] %= size
     
@@ -267,18 +339,32 @@ class Universe(base):
     
     def apply_pbc_vector(self, vec):
 
+        """
+        Periodic boundary conditions for DIRECTIONAL VECTORS a.k.a. VECTORS.
+
+        If a component of a vector is larger than half the box size (positive and negative), subtract one box size.
+
+        """
+
         assert vec.ndim == 2, 'Vector has not a dimension of 2'
         
-        #Apply PBC
-        vec[:, 0] = np.where(vec[:, 0] >    self.size_x / 2, vec[:, 0] - self.size_x, vec[:, 0])
-        vec[:, 0] = np.where(vec[:, 0] <= - self.size_x / 2, vec[:, 0] + self.size_x, vec[:, 0])
-
-        vec[:, 1] = np.where(vec[:, 1] >    self.size_y / 2, vec[:, 1] - self.size_y, vec[:, 1])
-        vec[:, 1] = np.where(vec[:, 1] <= - self.size_y / 2, vec[:, 1] + self.size_y, vec[:, 1])
+        #Apply PBC - X
+        for i, size in enumerate([self.size_x, self.size_y]):
+            vec[:, i] = np.where(vec[:, i] >    size / 2, vec[:, i] - size, vec[:, i])
+            vec[:, i] = np.where(vec[:, i] <= - size / 2, vec[:, i] + size, vec[:, i])
 
         return vec
 
     def check_circ_cond(self, pos, mid, r):
+
+        """
+        Check if a particle is within a circle.
+
+        Parameters
+        ----------
+        
+
+        """
 
         assert mid.ndim == 2, 'Middle point is not two-dimensional'
 
@@ -287,7 +373,7 @@ class Universe(base):
 
         circ_dist = np.linalg.norm(circ_coor, axis = 1)
 
-        return np.where(circ_dist <= r)[0]
+        return np.where(circ_dist < r)[0]
         
 
     def check_square_cond(self, pos, Lx, Ly, mid): 
@@ -358,27 +444,88 @@ class Universe(base):
 
     #----------------------------------------------------------------------------------------------------------------------------------------
     #Metropolis
-
     @staticmethod
-    def metropolis_decision(deltaE):
+    def metropolis_decision(deltaE, RT):
         
-        if deltaE >= 1: return True
+        if deltaE <= 0: return True
         else:
 
-            p_accept = np.min( [1, deltaE ] )
+            p_accept = np.min( [1, np.exp(- deltaE / RT ) ] )
             alpha    = np.random.rand(1)[0]
 
             if alpha < p_accept: return True
             else: return False
     
     @staticmethod
-    def entropy(x):
-        return -x * np.log(x) - (1-x) * np.log(1-x)
+    def simple_metropolis_decision(energy_barrier_height, RT):
+        
+        p_accept = np.min( [1, np.exp(- energy_barrier_height / RT ) ] )
+        alpha    = np.random.rand(1)[0]
+
+        if alpha < p_accept: return True
+        else: return False
+ 
+#    @staticmethod
+#    def get_delta_E(x_new, x_old, f_true, N, forceconstant):
+#
+#        """
+#        Calculation of the energy difference for changing the number of particles in domains.
+#        The energy difference is calculated via a simple spring potential.
+#
+#        """
+#
+#        #Calculate fraction of particles in domains
+#        f_old = x_old / N
+#        f_new = x_new / N
+#
+#        #Calculate energy levels based on simple spring potential
+#        E_old = forceconstant * 0.5 * (f_old - f_true)**2 + 295 * 8.3145 * 1E-3 * ( f_new * np.log(f_new) + (1-f_new) * np.log(1-f_new)) 
+#        E_new = forceconstant * 0.5 * (f_new - f_true)**2 + 295 * 8.3145 * 1E-3 * ( f_new * np.log(f_old) + (1-f_old) * np.log(1-f_old))
+#
+#        #Calculate energy difference
+#        #<= 0 New Energy level is lower or equal -> accept
+#        # > 0 New Energy level is higher -> prop. reject
+#
+#        #Unit: kJ/mol
+#        deltaE = ( E_new - E_old )
+#
+#        return deltaE
+#    
+#    @staticmethod
+#    def get_delta_E_v2(x_new, x_old, r_true, N, forceconstant):
+#
+#        """
+#        Calculation of the energy difference for changing the number of particles in domains.
+#        The energy difference is calculated via a simple spring potential.
+#
+#        """
+#
+#        #Calculate fraction of particles in domains
+#        fi_old, fo_old = x_old / N, (N-x_old) / N
+#        fi_new, fo_new = x_new / N, (N-x_new) / N
+#
+#        r_old = fi_old / fo_old
+#        r_new = fi_new / fo_new
+#
+#        #Calculate energy levels based on simple spring potential
+#        E_old = (r_old - r_true)**2 
+#        E_new = (r_new - r_true)**2 
+#
+#        #Calculate energy difference
+#        #<= 0 New Energy level is lower or equal -> accept
+#        # > 0 New Energy level is higher -> prop. reject
+#
+#        #Unit: kJ/mol
+#        deltaE = forceconstant * 0.5 * ( E_new - E_old )
+#
+#        return deltaE
 
     def double_metropolis_scheme(self, index, prev_index ):
 
         #Target fraction of lipids INSIDE domains
-        f_inside_true = self.metropolis['Inside']
+        #f_inside_true  = self.metropolis['Inside']
+        #ratio_true     = self.metropolis['Ratio']
+        #f_outside_true = self.metropolis['Outside']
         #Note!
         #self.in_domains contains upto now only information from the previous step and not from the current!
 
@@ -409,13 +556,15 @@ class Universe(base):
         #Iterate over A.2
         for p_index in entering_index:
 
-            f_inside_new = ( self.in_domains.sum() + 1 ) / self.N
-
-            deltaE = (f_inside_true - f_inside_new) / f_inside_new
-            #print('Entering:', deltaE)
+            #x_old = self.in_domains.sum()     
+            #x_new = self.in_domains.sum() + 1
+            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, area = self.total_area_domains, f_true = f_inside_true, forceconstant = self.fconstant)
+            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = f_inside_true, forceconstant = self.fconstant)
+            #deltaE = self.get_delta_E_v2(x_old = x_old, x_new = x_new, N = self.N, r_true = ratio_true, forceconstant = self.fconstant)
+            #if self.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = True    #Particle is in domain
             
             #Entering is accepted
-            if self.metropolis_decision(deltaE = deltaE): self.in_domains[ p_index ] = True    #Particle is in domain
+            if self.simple_metropolis_decision(energy_barrier_height = self.barrier, RT = self.RT): self.in_domains[ p_index ] = True
             #Entering is rejected
             else: index_after_metropolis.append( p_index ) #Particle will get reflected
         
@@ -427,13 +576,15 @@ class Universe(base):
         #Iterate over B.1
         for p_index in leaving_index:
 
-            f_inside_new = ( self.in_domains.sum() - 1 ) / self.N
+            #x_old = self.in_domains.sum()     
+            #x_new = self.in_domains.sum() - 1
+            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, area = self.total_area_domains, f_true = f_inside_true, forceconstant = self.fconstant)
+            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = f_inside_true, forceconstant = self.fconstant)
+            #deltaE = self.get_delta_E_v2(x_old = x_old, x_new = x_new, N = self.N, r_true = ratio_true, forceconstant = self.fconstant)
+            #if self.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[p_index] = False #Particle will leave domains, without a reflection
             
-            deltaE = f_inside_new / (f_inside_new - f_inside_true)
-            #print('Leaving:', deltaE)
-
             #Leaving is accepted
-            if self.metropolis_decision(deltaE = deltaE): self.in_domains[p_index] = False #Particle will leave domains, without a reflection
+            if self.simple_metropolis_decision(energy_barrier_height = self.barrier, RT = self.RT): self.in_domains[ p_index ] = False
             #Leaving is rejected
             else: index_after_metropolis.append( p_index )
 
@@ -924,23 +1075,36 @@ class Universe(base):
         return 1
 
 
-    def mean_square_displacement(self, skip):
+    def mean_square_displacement(self, skip, begin = 0, stop = None):
 
         print(f"Calculate MSD from Frame 1/tau {1*self.dt * self.nstxout}ns to Frame {self.nsteps // self.nstxout}/tau {(self.nsteps // self.nstxout) * self.dt * self.nstxout} with skip Frame {skip/(self.dt* self.nstxout)}/tau {skip}ns")
+
+        if stop == None: stop = self.nsteps * self.dt
+ 
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        
+        #Convert time to frames
+        begin = int( np.round( begin / self.dt / self.nstxout ) )
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
 
         #Load data
         self.load_data_unwrap()
 
+        nsteps_analysis = stop - begin
+
         skip /= (self.dt * self.nstxout)
 
-        lagtimes = np.arange(1, self.nsteps // self.nstxout, int(skip))
+        lagtimes = np.arange(1, nsteps_analysis // self.nstxout, int(skip))
 
         msd = np.zeros( lagtimes.shape[0] , dtype = np.float32)
         sd_per_particle = np.zeros( (lagtimes.shape[0], self.N) , dtype = np.float32)
 
+        u_storage_analysis = self.u_storage[begin:stop]
+
         for i, lag in tqdm(enumerate(lagtimes), total = lagtimes.shape[0]):
 
-            dr = self.u_storage[:-lag, :, :] - self.u_storage[lag:, :, :]
+            dr = u_storage_analysis[:-lag, :, :] - u_storage_analysis[lag:, :, :]
             sqdist = np.square(dr).sum(axis=-1)
 
             msd[i] = sqdist.mean()
@@ -951,18 +1115,31 @@ class Universe(base):
 
         return tau, msd, sd_per_particle
     
-    def mean_square_displacement_distr(self, tau):
+    def mean_square_displacement_distr(self, tau, begin = 0, stop = None):
+        
+        if stop == None: stop = self.nsteps * self.dt
+ 
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert (stop - begin) >= tau, 'Error. Time lag is larger than time interval!'
+
+        #Convert time to frames
+        begin = int( np.round( begin / self.dt / self.nstxout ) )
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
        
         #Load data
         self.load_data_unwrap()
+        
+        u_storage_analysis = self.u_storage[begin:stop]
 
-        lag = int(np.round(tau / (self.dt * self.nstxout) ))
+        lag = int( np.round(tau / self.dt / self.nstxout) )
 
         dr = self.u_storage[:-lag, :, :] - self.u_storage[lag:, :, :]
         sqdist = np.square(dr).sum(axis=-1)
 
         sd_per_particle = sqdist.mean(axis = 0)
 
+        print(f'Analysis from {begin * self.dt * self.nstxout / 1000 / 1000} to {stop * self.dt * self.nstxout / 1000 / 1000}')
         print(f'MSD Distribution at {lag * self.dt * self.nstxout / 1000 / 1000} ms') 
 
         return sd_per_particle
