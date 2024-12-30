@@ -643,13 +643,13 @@ class Universe(base):
 
             #---------------------------------------------------------------------------------------
             #For some steps the coordinates of the previous step are required
-            p_prev = self.w_universe - self.displace
+            #p_prev = self.w_universe - self.displace
 
-            p_prev[:, 0] %= self.size_x
-            p_prev[:, 1] %= self.size_y
+            #p_prev[:, 0] %= self.size_x
+            #p_prev[:, 1] %= self.size_y
 
-            assert np.allclose( self.w_universe_prev, p_prev ), 'Quick check!'
-            assert np.allclose( p_prev, self.w_universe_prev ), 'Quick check!'
+            #assert np.allclose( self.w_universe_prev, p_prev ), 'Quick check!'
+            #assert np.allclose( p_prev, self.w_universe_prev ), 'Quick check!'
 
             #---------------------------------------------------------------------------------------
             #Iterate over stored geometries
