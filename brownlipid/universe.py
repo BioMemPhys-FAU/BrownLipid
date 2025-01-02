@@ -460,40 +460,31 @@ class Universe(base):
             else: return False
     
     @staticmethod
-    def simple_metropolis_decision(energy_barrier_height, RT):
-        
-        p_accept = np.min( [1, np.exp(- energy_barrier_height / RT ) ] )
-        alpha    = np.random.rand(1)[0]
+    def get_delta_E(x_new, x_old, f_true, N, forceconstant):
 
-        if alpha < p_accept: return True
-        else: return False
- 
-#    @staticmethod
-#    def get_delta_E(x_new, x_old, f_true, N, forceconstant):
-#
-#        """
-#        Calculation of the energy difference for changing the number of particles in domains.
-#        The energy difference is calculated via a simple spring potential.
-#
-#        """
-#
-#        #Calculate fraction of particles in domains
-#        f_old = x_old / N
-#        f_new = x_new / N
-#
-#        #Calculate energy levels based on simple spring potential
-#        E_old = forceconstant * 0.5 * (f_old - f_true)**2 + 295 * 8.3145 * 1E-3 * ( f_new * np.log(f_new) + (1-f_new) * np.log(1-f_new)) 
-#        E_new = forceconstant * 0.5 * (f_new - f_true)**2 + 295 * 8.3145 * 1E-3 * ( f_new * np.log(f_old) + (1-f_old) * np.log(1-f_old))
-#
-#        #Calculate energy difference
-#        #<= 0 New Energy level is lower or equal -> accept
-#        # > 0 New Energy level is higher -> prop. reject
-#
-#        #Unit: kJ/mol
-#        deltaE = ( E_new - E_old )
-#
-#        return deltaE
-#    
+        """
+        Calculation of the energy difference for changing the number of particles in domains.
+        The energy difference is calculated via a simple spring potential.
+
+        """
+
+        #Calculate fraction of particles in domains
+        f_old = x_old / N
+        f_new = x_new / N
+
+        #Calculate energy levels based on simple spring potential
+        E_old = forceconstant * 0.5 * (f_old - f_true)**2 
+        E_new = forceconstant * 0.5 * (f_new - f_true)**2
+
+        #Calculate energy difference
+        #<= 0 New Energy level is lower or equal -> accept
+        # > 0 New Energy level is higher -> prop. reject
+
+        #Unit: kJ/mol
+        deltaE = ( E_new - E_old )
+
+        return deltaE
+    
 #    @staticmethod
 #    def get_delta_E_v2(x_new, x_old, r_true, N, forceconstant):
 #
@@ -534,14 +525,14 @@ class Universe(base):
         The implemention distinguish between four cases for each particle:
 
                                __ A.1 Particle was already in domain in the step before -> Particle remains in domain
-                              /
+                              |
         A) Particle in domain 
-                              \__ A.2 Particle was not in domain in the step before -> Particle wants to enter domain -> Metropolis
+                              |__ A.2 Particle was not in domain in the step before -> Particle wants to enter domain -> Metropolis
 
                                   __ B.1 Particle was already in domain in the step before -> Particle wants to leave domain -> Metropolis
-                                 /
+                                 |
         B) Particle not in domain
-                                 \__ B.2 Particle was not in domain in the step before -> Particle stays outside
+                                 |__ B.2 Particle was not in domain in the step before -> Particle stays outside
 
         The array self.in_domains contains information about the assignment of particles to domains in the previous step, but not about
         the current. self.in_domains is updated during this function.
@@ -560,9 +551,6 @@ class Universe(base):
 
         """
         
-        #Target fraction of lipids INSIDE domains
-        #f_inside_true  = self.metropolis['Inside']
-
         #Case A
         A = self.in_domains[ index ]
         #Case A.1 ->  TRUE: Particle was already in this domain and remains there -> Do not reflect
@@ -593,13 +581,18 @@ class Universe(base):
         #Iterate over A.2
         for p_index in entering_index:
 
-            #x_old = self.in_domains.sum()     
-            #x_new = self.in_domains.sum() + 1
-            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, area = self.total_area_domains, f_true = f_inside_true, forceconstant = self.fconstant)
-            #deltaE = self.get_delta_E_v2(x_old = x_old, x_new = x_new, N = self.N, r_true = ratio_true, forceconstant = self.fconstant)
+            if self.target_fraction != None:
+                x_old = self.in_domains.sum()     
+                x_new = self.in_domains.sum() + 1
+                deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = self.target_fraction, forceconstant = self.fconstant)
+
+            elif self.barrier != None:
+                deltaE = self.barrier
+
+            else: raise ValueError('Could not handle request!')
             
             #Entering is accepted
-            if self.simple_metropolis_decision(energy_barrier_height = self.barrier, RT = self.RT): self.in_domains[ p_index ] = True
+            if self.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = True
             #Entering is rejected
             else: index_after_metropolis.append( p_index ) #Particle will get reflected
         
@@ -610,12 +603,18 @@ class Universe(base):
         #Iterate over B.1
         for p_index in leaving_index:
 
-            #x_old = self.in_domains.sum()     
-            #x_new = self.in_domains.sum() - 1
-            #deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, area = self.total_area_domains, f_true = f_inside_true, forceconstant = self.fconstant)
+            if self.target_fraction != None:
+                x_old = self.in_domains.sum()     
+                x_new = self.in_domains.sum() - 1
+                deltaE = self.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = self.target_fraction, forceconstant = self.fconstant)
+
+            elif self.barrier != None:
+                deltaE = self.barrier
+
+            else: raise ValueError('Could not handle request!')
             
             #Leaving is accepted
-            if self.simple_metropolis_decision(energy_barrier_height = self.barrier, RT = self.RT): self.in_domains[ p_index ] = False
+            if self.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = False
             #Leaving is rejected
             else: index_after_metropolis.append( p_index )
 
@@ -717,11 +716,11 @@ class Universe(base):
                     #--------------------------------------------------------------------------------
                     
                     condition = True
-
+                    counter = 0
                     while condition:
 
-                        index      = self.check_square_cond(pos = self.w_universe, Lx = Lx, Ly = Ly, mid = mid)
-                        prev_index = self.check_square_cond(pos = p_prev,          Lx = Lx, Ly = Ly, mid = mid)
+                        index      = self.check_square_cond(pos = self.w_universe     , Lx = Lx, Ly = Ly, mid = mid)
+                        prev_index = self.check_square_cond(pos = self.w_universe_prev, Lx = Lx, Ly = Ly, mid = mid)
                         
                         if any(self.metropolis): index = self.double_metropolis_scheme( index, prev_index )
                         
@@ -737,11 +736,16 @@ class Universe(base):
                                                                       Lx       = Lx,
                                                                       Ly       = Ly)
                 
-                        new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = p_prev[index], n = norm )
+                        new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = self.w_universe_prev[index], n = norm )
                 
-                        p_prev[index]          = intersection
-                        self.displace[index]   = d_new
-                        self.w_universe[index] = new_pos
+                        self.w_universe_prev[index] = intersection
+                        self.displace[index]        = d_new
+                        self.w_universe[index]      = new_pos
+                        
+                        counter += 1
+                        
+                        assert counter < 2, 'Weird'
+                        
                 
                 else:
                     raise ValueError("Currently I cannot handle the provided geometry.")
@@ -781,8 +785,17 @@ class Universe(base):
         dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
         dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
 
-        assert np.allclose(dot_pr, dot_pp), "In angle is not equal out angle"
-        assert np.allclose(dot_pp, dot_pr), "In angle is not equal out angle"
+        if not np.allclose(dot_pr, dot_pp) and not np.allclose(dot_pp, dot_pr):
+
+            print(dot_pr)
+            print(dot_pp)
+            
+            print('Intersection:')
+            print(intersection)
+
+            raise ValueError("In angle is not equal out angle")
+
+
         #----------------------------------------------------
 
         return reflection, reflection_vector
@@ -942,6 +955,8 @@ class Universe(base):
         
         vert = (e2 - e1)
         vert = self.apply_pbc_vector(vert.reshape(1, -1) )[0]
+        
+        if vert.sum() == 0: vert = (e2 - e1)
 
         t = self.perpDot(c , vert) / self.perpDot(d, vert)
 
@@ -995,7 +1010,6 @@ class Universe(base):
         true_intersection[ cond ] = False
 
 
-
         """
         p_to_intersection = intersection - p
         p_to_intersection = self.apply_pbc_vector(p_to_intersection)
@@ -1011,6 +1025,7 @@ class Universe(base):
         true_intersection[ intersection[:, 1] > self.size_y ] = False
         """
         intersection[~true_intersection] = np.array([1E-8, 1E-8])
+
 
         return intersection, true_intersection, vert
 
@@ -1030,7 +1045,7 @@ class Universe(base):
         
         number_of_vertices = len(edges) - 1
 
-        final_norm = np.zeros( (points.shape[0], 2), dtype = np.float32)
+        final_norm         = np.zeros( (points.shape[0], 2), dtype = np.float32)
         final_intersection = np.zeros( (points.shape[0], 2), dtype = np.float32)
 
         for i in range( len(edges) - 2 + 1 ):
@@ -1049,7 +1064,7 @@ class Universe(base):
 
             elif a_to_b.sum() < 0.0: norm = polygon_point_b - intersection
 
-            else: raise ValueError("Fuck")
+            else: raise ValueError(f"Fuck. Value of vertices: {a_to_b}. A: {polygon_point_a} B: {polygon_point_b}")
             
             norm = self.apply_pbc_vector(norm)
             norm = np.flip(norm, axis = 1)
@@ -1063,20 +1078,25 @@ class Universe(base):
             final_norm += norm
             final_intersection += intersection
 
-        #assert np.all(np.logical_or( np.abs(len_final - 1.) < 1E-6, np.abs(len_final) < 1E-6)) , "Normals are not normalized!"
-
         len_norm = np.linalg.norm(final_norm, axis = 1)
 
+        final_intersection[:, 0] %= self.size_x
+        final_intersection[:, 1] %= self.size_y
 
-        #print((points - displace)[len_norm > 1.])
-        #print(points[             len_norm > 1.])
-        #print(displace[             len_norm > 1.])
-        #print(len_norm[         len_norm > 1.])
-        #print(final_norm[         len_norm > 1.])
-        #print(final_intersection[ len_norm > 1.])
-        
+        if not ( np.all( np.abs( len_norm - 1.) < 1E-8) == True and np.all( final_intersection[:, 0] < self.size_x ) == True and np.all( final_intersection[:, 1] < self.size_y ) == True):
 
-        if not np.all( np.abs( len_norm - 1.) < 1E-8):
+            print('Norm')
+            print(final_norm)
+            print('Intersection')
+            print(final_intersection)
+            print('Positions')
+            print(points)
+            print('Prev Points')
+            print(points-displace)
+            
+            print( 'Check' )
+            print( len_norm[ np.abs( len_norm - 1.) >= 1E-8 ] )
+
             np.save(arr = points, file = 'debug_points.npy')
             np.save(arr = displace, file = 'debug_displace.npy')
             np.save(arr = final_intersection, file = 'debug_intersection.npy')
@@ -1148,8 +1168,22 @@ class Universe(base):
 
     def mean_square_displacement(self, skip, begin = 0, stop = None):
 
-        print(f"Calculate MSD from Frame 1/tau {1*self.dt * self.nstxout}ns to Frame {self.nsteps // self.nstxout}/tau {(self.nsteps // self.nstxout) * self.dt * self.nstxout} with skip Frame {skip/(self.dt* self.nstxout)}/tau {skip}ns")
+        """
+        Mean Square Displacement
 
+        Calculate the Mean Square Displacement of the particles for different lag times.
+
+        Parameters
+        ----------
+
+        skip := float
+            Skip lag times to decrease calculation time (ns)
+        begin := float
+            Start time for analysis (ns)
+        stop := float
+            Stop time for analysis (ns)
+        """
+        
         if stop == None: stop = self.nsteps * self.dt
  
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
@@ -1158,31 +1192,50 @@ class Universe(base):
         #Convert time to frames
         begin = int( np.round( begin / self.dt / self.nstxout ) )
         stop  = int( np.round( stop  / self.dt / self.nstxout ) )
+        skip  = int( np.round( skip  / self.dt ) )
+
+        assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
+        
+        #Number of steps for analysis
+        nsteps_analysis = stop - begin
+
+        print(f"Calculating MSD...")
+        print(f"Start: Frame {begin}")
+        print(f"Stop : Frame {stop}")
+        print(f"Skip : Frame {skip}")
+        print(f"Frames: {nsteps_analysis}")
+        print("")
+
 
         #Load data
         self.load_data_unwrap()
 
-        nsteps_analysis = stop - begin
+        #Lag times at which MSD is evaluated
+        lagtimes = np.arange(0, nsteps_analysis, skip)
 
-        skip /= (self.dt * self.nstxout)
-
-        lagtimes = np.arange(1, nsteps_analysis // self.nstxout, int(skip))
-
-        msd = np.zeros( lagtimes.shape[0] , dtype = np.float32)
-        sd_per_particle = np.zeros( (lagtimes.shape[0], self.N) , dtype = np.float32)
+        #Storage arrays
+        msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)
+        sd_per_particle = np.zeros( (lagtimes.shape[0], self.N), dtype = np.float32)
 
         u_storage_analysis = self.u_storage[begin:stop]
 
+        assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
+
+        #Evalulate lagtimes
         for i, lag in tqdm(enumerate(lagtimes), total = lagtimes.shape[0]):
 
+            if i == 0: continue
+
             dr = u_storage_analysis[:-lag, :, :] - u_storage_analysis[lag:, :, :]
+
             sqdist = np.square(dr).sum(axis=-1)
 
-            msd[i] = sqdist.mean()
+            msd[i]             = sqdist.mean()
             sd_per_particle[i] = sqdist.mean(axis = 0)
 
+        #Convert lagtimes array to physical time
         tau = np.float32(lagtimes)
-        tau *= self.dt * self.nstxout
+        tau = tau * self.dt * self.nstxout
 
         return tau, msd, sd_per_particle
     
@@ -1216,11 +1269,13 @@ class Universe(base):
         return sd_per_particle
     
     @staticmethod
-    def mean_square_displacement_fit(tau, msd):
+    def mean_square_displacement_fit(tau, msd, dim = 2):
         
         #tau -> ns
         #msd -> nm2
         DiffCoeff, Intercept = np.polyfit(x = tau, y = msd, deg = 1)
+
+        DiffCoeff /= (2 * dim)
 
         #DiffCoeff -> nm2/ns -> um2/ms
         #Intercept -> nm2

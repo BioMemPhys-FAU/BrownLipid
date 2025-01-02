@@ -91,7 +91,7 @@ class base:
                         edges.append( np.array([ mx + Lx/2 , my + Ly/2 ]) )
                         edges.append( np.array([ mx + Lx/2 , my - Ly/2 ]) )
                         
-                        domains[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
+                        #domains[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
                         
                         #Append the rest of the domain information
                         self.domain_geometry[f"p{i}"].append( Lx )
@@ -149,7 +149,8 @@ class base:
                         edges.append( np.array([ mx + Lx/2 , my + Ly/2 ]) )
                         edges.append( np.array([ mx + Lx/2 , my - Ly/2 ]) )
                         
-                        hard_boundaries_geometry[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
+                        #hard_boundaries_geometry[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
+                        hard_boundaries_geometry[f"p{i}"] = [ np.array([ edge[0], edge[1] ]) for edge in edges ]
                         
                         hard_boundaries_geometry[f"p{i}"].append( Lx )
                         hard_boundaries_geometry[f"p{i}"].append( Ly )
@@ -165,14 +166,22 @@ class base:
         #Initialize for metropolis steps
         if any(self.metropolis):
 
-            #Fill metropolis dictionary
-            #f = self.metropolis['Inside']
+            self.target_fraction = None
+            self.barrier = None
 
-            #self.metropolis['Inside']  = (     f * self.N) / self.total_area_domains
-            #self.metropolis['Outside'] = ( (1-f) * self.N) / ((self.size_x * self.size_y) - self.total_area_domains)
-            self.barrier =  self.metropolis['Barrier']
-            #Boltzmann factor (kJ/mol)
+            if   'Inside'     in self.metropolis.keys() and 'Barrier' not in self.metropolis.keys(): 
+
+                self.target_fraction = self.metropolis['Inside']
+                self.fconstant       = 1E8
+            
+            elif 'Inside' not in self.metropolis.keys() and 'Barrier'     in self.metropolis.keys(): self.barrier         = self.metropolis['Barrier']
+            
+            elif 'Inside'     in self.metropolis.keys() and 'Barrier'     in self.metropolis.keys(): raise ValueError('Can handle either Inside or Barrier for Metropolis. But not both!')
+
+            else: raise ValueError('Can not handle metropolis request!')
+
             self.RT = 8.3145 * 1E-3 * self.temp
+
             """
             fin = self.metropolis['Inside']
             fout = 1. - fin
