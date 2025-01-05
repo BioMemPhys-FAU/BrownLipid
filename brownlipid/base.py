@@ -10,17 +10,17 @@ class base:
                            self,
                           size_x:                    float = 10.0,
                           size_y:                    float = 10.0,
-                          size_z:                    float = 10.0,
                                N:                      int = 1000,
-                             dim:                      int = 2,
+                         pbc_dim:                      str = 'xy',
                           nsteps:                      int = 5000,
-                              dt:                    float = 0.1,
+                              dt:                    float = 1.0,
                          nstxout:                      int = 1,
                           nstchk:                      int = 1, 
                     base_d_coeff:                    float = 1.,
                          domains:                     dict = {},
                  hard_boundaries:                     dict = {},
                       metropolis:                     dict = {},
+                 external_forces:                     dict = {},
                             temp:                    float = 295,
                           output:                      str = 'output'
 
@@ -29,9 +29,7 @@ class base:
         
         self.size_x       = size_x
         self.size_y       = size_y
-        self.size_z       = size_z
         self.N            = N
-        self.dim          = dim
         self.nsteps       = nsteps
         self.dt           = dt
         self.nstxout      = nstxout
@@ -39,7 +37,9 @@ class base:
         self.base_d_coeff = base_d_coeff
         self.output       = output
         self.metropolis   = metropolis
+        self.external_forces = external_forces
         self.temp         = temp
+        self.RT           = 8.3145 * 1E-3 * self.temp
 
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
@@ -48,6 +48,34 @@ class base:
         assert self.nsteps % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of number of steps!"
         assert self.nsteps % self.nstchk  == 0, "Frequency of checkpoints (nstchk) must be multiple of number of steps!"
         assert self.nstchk % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of frequency of checkpoints (nstchk)!"
+        
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #PBC Handling
+        pbc_index = []
+        pbc_size  = []
+
+        hard_wall_index = []
+        hard_wall_size  = []
+
+        for idx, size, dim in zip([0, 1], [self.size_x, self.size_y], ['x', 'y']):
+
+            if dim in pbc_dim:
+                if idx == 0: 
+                    pbc_index.append(1)
+                    pbc_size.append( self.size_y )
+                else: 
+                    pbc_index.append(0)
+                    pbc_size.append( self.size_x )
+            else:
+                if idx == 0: 
+                    hard_wall_index.append(1)
+                    hard_wall_size.append( self.size_y )
+                else: 
+                    hard_wall_index.append(0)
+                    hard_wall_size.append( self.size_x )
+        
+        self.pbc_dim   = (pbc_index, pbc_size)
+        self.hard_wall = (hard_wall_index, hard_wall_size)                
 
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #Init Domains with different diffusion coefficients
@@ -180,29 +208,26 @@ class base:
 
             else: raise ValueError('Can not handle metropolis request!')
 
-            self.RT = 8.3145 * 1E-3 * self.temp
+        if any(external_forces):
 
-            """
-            fin = self.metropolis['Inside']
-            fout = 1. - fin
+            self.lj_sig = external_forces['sigma']
+            self.lj_eps = external_forces['epsilon']
 
-            self.metropolis['Ratio'] = fin / fout
+            self.lj_A12 = 48 * self.lj_eps * self.lj_sig**12
+            self.lj_B6  = 24 * self.lj_eps * self.lj_sig**6
 
-            #Calculate force constant for spring potential
+            self.lj_sig6     = external_forces['sigma']
+            
+            self.lj_sig12    = external_forces['sigma']
 
+            self.lj_eps12   = external_forces['epsilon']
+            
+            self.lj_nstlist = external_forces['nstlist']
+            
+            #Only squared sums are considerd later
+            self.lj_cutoff  = external_forces['r_vdw']**2
+            self.lj_buffer  = external_forces['r_list']**2
 
-            sigma = self.fluctuations / 2
-
-            self.fconstant = self.RT / (sigma)**2 
-
-
-            print('Metropolis Algorithm was requested!')
-            print('Temperature:', self.temp)
-            print('Domain Ratio:', self.metropolis['Ratio'])
-            #print('Target density outside domains:', self.metropolis['Outside'])
-            print('Force constant (kJ/mol/nm^2):',  self.fconstant)
-            print('Fluctuations:', self.fluctuations)
-            """
 
         self.in_domains = np.zeros( self.N, dtype = bool ) 
 

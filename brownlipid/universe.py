@@ -46,8 +46,8 @@ class Universe(base):
         
         #Setup storage for positions -> Shape: (Number of frames in checkpoint file, Number of Particles, Number of dimensions)
         #The first checkpoint file has one frame more, because it contains also the init positions
-        w_storage  = np.zeros( ( nstchk_frames + 1, self.N, self.dim ), dtype = np.float32 )
-        u_storage  = np.zeros( ( nstchk_frames + 1, self.N, self.dim ), dtype = np.float32 )
+        w_storage  = np.zeros( ( nstchk_frames + 1, self.N, 2 ), dtype = np.float32 )
+        u_storage  = np.zeros( ( nstchk_frames + 1, self.N, 2 ), dtype = np.float32 )
 
         #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
         time_array = np.zeros(  nstchk_frames + 1, dtype = np.float32 )
@@ -74,11 +74,17 @@ class Universe(base):
             #-----------------------------------------------------------------------------------------------------------------
             #Evolve particle position
 
+            self.frame = i
+
             #Move particles in time
-            self.forward_in_time()
+            if not any(self.external_forces): self.forward_in_time()
+            else: self.forward_in_time_external_forces()
             
-            #Apply boundary conditions
-            self.apply_pbc()
+            #Apply hard wall boundary conditions
+            self.w_universe = self.apply_hard_wall(pos = self.w_universe)
+            
+            #Apply periodic boundary conditions
+            self.w_universe = self.apply_pbc(pos = self.w_universe)
             
             #Apply hard boundaries
             self.hard_boundaries()
@@ -90,7 +96,7 @@ class Universe(base):
             #Store particle positions
 
             #Unwrap self.w_universe and store the positions in self.u_universe
-            for j, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
+            for j, size in enumerate([self.size_x, self.size_y]):
                 self.u_universe[:, j] = self.w_universe[:, j] - np.floor( (self.w_universe[:, j] - self.u_universe[:, j]) / size + 0.5 ) * size
 
             #Write current state of the universe into storage arrays
@@ -127,8 +133,8 @@ class Universe(base):
                     np.save( arr = f_inside, file = self.output +   f"_f_inside.{chk_number.zfill(5)}" )
         
                     #Setup storage for positions -> Shape: (Number of frames in checkpoint file, Number of Particles, Number of dimensions)
-                    w_storage  = np.zeros( ( nstchk_frames, self.N, self.dim ), dtype = np.float32 )
-                    u_storage  = np.zeros( ( nstchk_frames, self.N, self.dim ), dtype = np.float32 )
+                    w_storage  = np.zeros( ( nstchk_frames, self.N, 2 ), dtype = np.float32 )
+                    u_storage  = np.zeros( ( nstchk_frames, self.N, 2 ), dtype = np.float32 )
 
                     #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
                     time_array = np.zeros(  nstchk_frames, dtype = np.float32 )
@@ -183,30 +189,33 @@ class Universe(base):
         #----------------------------------------------------------------------------------------------------------
         #Standard Workflow
         #Sample particle positions from random uniform distribution
-        init_pos = np.random.rand( self.N, self.dim )
+        init_pos = np.random.rand( self.N, 2 )
         
         #Scale the coordinates according to the box lengths
-        for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]): init_pos[:, i] *= size
+        for i, size in enumerate([self.size_x, self.size_y]): init_pos[:, i] *= size
         
         #----------------------------------------------------------------------------------------------------------
         #Clean restricted areas
         #Take care of domains with hard boundaries
-        init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
-        
-        #If there are no hard boundaries, then take care of domains with different diffusion coefficients
-        if not any( self.hard_boundaries_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.domain_geometry)
-        #If there are no type of domains just pass
-        else: pass
+
+        if any(self.external_forces):
+            if any( self.hard_boundaries_geometry ): init_pos = self.clean_domains_minimum_distance(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
+            elif any( self.domain_geometry ): init_pos = self.clean_domains_minimum_distance(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
+            else: init_pos = self.clean_domains_minimum_distance(init_pos = init_pos, geometry_collection = {})
+
+        else:
+
+             if any( self.hard_boundaries_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
+             elif any( self.domain_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
+             else: pass
         
         #----------------------------------------------------------------------------------------------------------
         #Make some tests if the particle coordinates are in the box
         assert init_pos[:, 0].max() <= self.size_x 
         assert init_pos[:, 1].max() <= self.size_y
-        if self.dim == 3: assert init_pos[:, 2].max() <= self.size_z 
         
         assert init_pos[:, 0].min() >= 0
         assert init_pos[:, 1].min() >= 0
-        if self.dim == 3: assert init_pos[:, 2].min() >= 0
 
         #----------------------------------------------------------------------------------------------------------
         #Save the initial frame to disk
@@ -283,15 +292,103 @@ class Universe(base):
             print(f"There are {in_bound_idx.shape[0]} particles that need to be resampled! Please stay patienced!")
             
             #Resample only particle positions inside the boundaries
-            cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], self.dim )           
+            cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], 2 )           
 
             #Scale the coordinates to the right size
-            for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]): cleaned_init_pos[ in_bound_idx , i] *= size
+            for i, size in enumerate([self.size_x, self.size_y]): cleaned_init_pos[ in_bound_idx , i] *= size
         
         print('Resampling finished! :-)')
         print('Good luck with your simulations!')
 
         return cleaned_init_pos
+    
+    def clean_domains_minimum_distance(self, init_pos, geometry_collection):
+
+        """
+        The function should remove initials position of particles from domains (either hard boundaries or different diffusion coefficients).
+
+        Parameters
+        ----------
+
+        init_pos := numpy.ndarray
+            Array of initial positions that should be cleaned
+        geometry_collection := dict
+            Dictionary containing information about the domains geometries
+
+        Return
+        ------
+
+        cleaned_init_pos := numpy.ndarray
+            Array of cleaned initial positions
+
+        """
+
+        print('Found applied geometries!')
+        print('Start resampling...')
+
+        cleaned_init_pos = np.copy( init_pos )
+
+        check = True
+        
+        #Iterate as long as there are particles in domains
+        while check:
+        
+            #Init empty array to store particles indices in domains
+            in_bound_idx = np.array([], dtype = np.int64)
+
+            #Iterate over geometries
+            for key, geometry in geometry_collection.items():
+
+                #Circular domains
+                if 'c' in key:
+
+                    #Get indices of particles in circular domains
+                    in_bound_idx_key = self.check_circ_cond(pos = cleaned_init_pos,
+                                                            mid = geometry[0].reshape(1, 2),
+                                                            r   = geometry[1] )
+
+                #Rectangular domains
+                elif 'p' in key:
+
+                    #Get indices of particles in rectangular domains
+                    in_bound_idx_key = self.check_square_cond(pos = cleaned_init_pos,
+                                                              Lx  = geometry[4],
+                                                              Ly  = geometry[5],
+                                                              mid = geometry[6].reshape(1, 2))  
+                
+                else: raise ValueError(f'Key {key} not known!') 
+                
+                #Append to larger storage array
+                in_bound_idx = np.append( in_bound_idx, in_bound_idx_key )
+
+            #--------------------------------------------------------------
+            #Too close
+            dist_mat, vec_mat = self.distance_matrix_NxN(pos = cleaned_init_pos)
+            dist_mat = dist_mat.min(axis = 1)
+
+            close_idx = np.where( dist_mat < (self.lj_sig * 2**(1/6) * 0.7 )**2 )
+
+            in_bound_idx = np.append( in_bound_idx, close_idx )
+
+            if not ( in_bound_idx.size > 0 ): 
+                check = False
+                continue
+
+            in_bound_idx = np.unique(in_bound_idx)
+
+            print(f"There are {in_bound_idx.shape[0]} particles that need to be resampled! Please stay patienced!")
+            
+            #Resample only particle positions inside the boundaries
+            cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], 2 )           
+
+            #Scale the coordinates to the right size
+            for i, size in enumerate([self.size_x, self.size_y]): cleaned_init_pos[ in_bound_idx , i] *= size
+        
+        print('Resampling finished! :-)')
+        print('Good luck with your simulations!')
+
+        return cleaned_init_pos
+    
     
     #--------------------------------------------------------------------------------------------------------------
     # Function for the evolution of the system
@@ -315,7 +412,139 @@ class Universe(base):
         factor = np.sqrt( 2 * self.d_coeffs * self.dt ).reshape(-1, 1)
 
         #Calculate the displace vector
-        self.displace = factor * np.random.randn( self.N, self.dim )
+        self.displace = factor * np.random.randn( self.N, 2 )
+
+        #Store previous positions
+        self.w_universe_prev = np.copy( self.w_universe )
+
+        #Move particles
+        self.w_universe += self.displace
+
+    def distance_matrix_NxN(self, pos):
+
+        #Improvements taken from:
+        #https://github.com/Allen-Tildesley/examples/blob/master/python_examples/md_lj_module.py
+
+        dist_mat = np.ones((self.N, self.N)   , dtype = np.float32) * np.inf
+        vec_mat  = np.ones((self.N, self.N, 2), dtype = np.float32) * np.inf
+
+        #Fill only upper triangle
+        for i in range(self.N - 1):
+
+            rij    = pos[i, :] - pos[(i+1):, :] 
+            rij    = self.apply_pbc_vector( rij )
+
+            rij_sq = np.sum(rij**2,axis=1)
+
+            dist_mat[i, (i+1):]    = rij_sq
+            vec_mat[ i, (i+1):, :] = rij
+
+        #dist_mat[range(self.N), range(self.N) ] = np.inf
+
+        return dist_mat, vec_mat
+
+    def generate_pairlist(self):
+
+        #------------------------------------------------
+        #Setup pair list
+
+        dist_mat, vec_mat = self.distance_matrix_NxN(pos = self.w_universe)
+
+        pairlist = np.vstack( np.where( dist_mat <= self.lj_buffer ) ).T
+
+        #First column always smaller than second column
+        pairlist = np.sort(pairlist, axis = 1)
+
+        self.pairlist = np.unique(pairlist, axis = 0)
+
+        #------------------------------------------------
+        #Buffer
+
+        rij    =  vec_mat[ self.pairlist[:, 0], self.pairlist[:, 1] ]
+        rij_sq = dist_mat[ self.pairlist[:, 0], self.pairlist[:, 1] ]
+
+        assert np.all(np.isfinite(rij))     , 'Inf or nan in vector matrix!'
+        assert np.all(np.isfinite(rij_sq)), 'Inf or nan in distance matrix!'
+
+        #------------------------------------------------
+        #Cutoff
+        mask = (rij_sq <= self.lj_cutoff)
+
+        rij    = rij[mask]
+        rij_sq = rij_sq[mask]
+        
+        return rij, rij_sq, mask
+
+    def update_pairlist(self):
+
+        #Calculate distances
+        #Vector pointing from 1 to 0. Force is acting on self.pairlist[:, 0]
+        rij    = self.w_universe[ self.pairlist[:, 0] ] - self.w_universe[ self.pairlist[:, 1]]
+        rij    = self.apply_pbc_vector( rij )
+
+        rij_sq = np.sum(rij**2, axis = 1)
+        
+        mask = (rij_sq <= self.lj_cutoff)
+
+        vec_r      = rij[mask]
+        vec_r_norm = rij_sq[mask]
+
+        return vec_r, vec_r_norm, mask
+
+    def lennard_jones(self):
+
+        if (self.frame % self.lj_nstlist) == 1: rij, rij_sq, mask = self.generate_pairlist()
+        else: rij, rij_sq, mask = self.update_pairlist()
+
+        assert rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
+
+        inv_rij_sq = 1.0 / rij_sq
+
+        #Calculate powers
+        sr6  = inv_rij_sq ** 3
+        sr12 = sr6 ** 2
+
+        force = (self.lj_A12 * sr12 - self.lj_B6 * sr6 ) * inv_rij_sq 
+        force = force.reshape(-1, 1) * rij
+
+        force_per_particle = np.zeros( (self.N, 2), dtype = np.float32 )
+
+        k = 0
+        for pair in self.pairlist[mask]:
+
+            i, j = pair[0], pair[1]
+
+            force_per_particle[i] += force[k]
+            force_per_particle[j] -= force[k]
+
+            k += 1
+
+        return force_per_particle
+    
+    def forward_in_time_external_forces(self):
+
+        """
+        Displace particle positions according to the Brown's Diffusion.
+        For each particle and for every dimensions a random number from a standard normal distribution is drawn.
+        The random number is then scaled by a factor taking a diffusion coefficient into account:
+
+            sqrt( 2 * D * dt) (1)
+
+        Equation 1 takes the diffusion coefficient (D) and the time step (dt) of the simulation.
+
+        In this implementation D is an array (self.d_coeffs) that stores the diffusion coefficient of every particle.
+        The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
+        """
+
+        diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
+
+        #Calculate the factor for every particle.
+        factor = np.sqrt( 2 * diff_dt )
+
+        force = self.lennard_jones()
+
+        #Calculate the displace vector
+        self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
 
         #Store previous positions
         self.w_universe_prev = np.copy( self.w_universe )
@@ -323,7 +552,7 @@ class Universe(base):
         #Move particles
         self.w_universe += self.displace
     
-    def apply_pbc(self):
+    def apply_pbc(self, pos):
 
         """
         Periodic boundary conditions for POSITIONAL VECTORS a.k.a. POINTS.
@@ -332,10 +561,37 @@ class Universe(base):
         Since, a simple rectangular box shape is used as unit cell the modulo operator is applied here.
 
         """
+        
+        if not any( self.pbc_dim ): return pos
+        
+        assert pos.ndim == 2, 'Position vector has not a dimension of 2'
 
-        #Apply periodic boundary conditions for every dimension
-        for i, size in enumerate([self.size_x, self.size_y, self.size_z][:self.dim]):
-            self.w_universe[:, i] %= size
+        #Apply periodic boundary conditions for every requested dimension
+        for i, size in zip(self.pbc_dim[0], self.pbc_dim[1]): pos[:, i] %= size
+
+        return pos
+    
+    def apply_hard_wall(self, pos):
+
+        """
+        Periodic boundary conditions for POSITIONAL VECTORS a.k.a. POINTS.
+
+        Particles leaving the box on one site, enter the box again from the opposite site.
+        Since, a simple rectangular box shape is used as unit cell the modulo operator is applied here.
+
+        """
+        
+        if not any( self.hard_wall ): return pos
+
+        assert pos.ndim == 2, 'Position vector has not a dimension of 2'
+
+        #Apply periodic boundary conditions for every requested dimension
+        for i, size in zip(self.hard_wall[0], self.hard_wall[1]): 
+            
+            pos[:, i] = np.where(pos[:, i] < 0   , -1 * pos[:, i]       , pos[:, i])
+            pos[:, i] = np.where(pos[:, i] > size,  2 * size - pos[:, i], pos[:, i])
+
+        return pos
     
     #--------------------------------------------------------------------------------------------------------------
     # Function for different geometric tasks
@@ -348,11 +604,13 @@ class Universe(base):
         If a component of a vector is larger than half the box size (positive and negative), subtract one box size.
 
         """
+        
+        if not any( self.pbc_dim ): return vec
 
         assert vec.ndim == 2, 'Vector has not a dimension of 2'
         
-        #Apply PBC - X
-        for i, size in enumerate([self.size_x, self.size_y]):
+        #Apply PBC
+        for i, size in zip(self.pbc_dim[0], self.pbc_dim[1]):
             vec[:, i] = np.where(vec[:, i] >    size / 2, vec[:, i] - size, vec[:, i])
             vec[:, i] = np.where(vec[:, i] <= - size / 2, vec[:, i] + size, vec[:, i])
 
@@ -686,7 +944,7 @@ class Universe(base):
                                                                  r           = r
                                                                  )
                     
-                    new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = self.w_universe_prev[index], n = norm )
+                    new_pos, d_new = self.calc_reflection(intersection = intersection, p_in = self.w_universe[index], n = norm )
                     
                     if not np.all( index_in_domains == index[ self.check_circ_cond(pos = new_pos, mid = mid, r = r) ] ):
                         print('Error points are not in circle, but are expected to be in circle!')
@@ -736,7 +994,7 @@ class Universe(base):
                                                                       Lx       = Lx,
                                                                       Ly       = Ly)
                 
-                        new_pos, d_new = self.calc_reflection(intersection = intersection, p_prev = self.w_universe_prev[index], n = norm )
+                        new_pos, d_new = self.calc_reflection(intersection = intersection, p_in = self.w_universe[index], n = norm )
                 
                         self.w_universe_prev[index] = intersection
                         self.displace[index]        = d_new
@@ -750,7 +1008,7 @@ class Universe(base):
                 else:
                     raise ValueError("Currently I cannot handle the provided geometry.")
             
-    def calc_reflection(self, intersection, p_prev, n):
+    def calc_reflection(self, intersection, p_in, n):
 
         """
         Calculate reflection vector of vector d with normal n
@@ -765,18 +1023,18 @@ class Universe(base):
         #d.shape = (Nr, 2)
         #n.shape = (n , 2)
         
-        d_new = intersection - p_prev
-        d_new = self.apply_pbc_vector(d_new)
+        d_rest = p_in - intersection
+        d_rest = self.apply_pbc_vector(d_rest)
 
-        reflection_vector =  d_new - 2 * np.sum(d_new * n, axis = 1).reshape(-1, 1) * n
+        reflection_vector =  d_rest - 2 * np.sum(d_rest * n, axis = 1).reshape(-1, 1) * n
         
         reflection = intersection + reflection_vector
-        reflection[:, 0] %= self.size_x
-        reflection[:, 1] %= self.size_y
+
+        reflection = self.apply_pbc( reflection.reshape(-1, 2) )
 
         #----------------------------------------------------
         #Test reflection
-        pos_p_prev = -1 * d_new
+        pos_p_prev = -1 * d_rest
         pos_ref    = self.apply_pbc_vector(reflection_vector)
 
         dot_pp = np.sum(pos_p_prev  * n, axis = 1)
@@ -860,8 +1118,7 @@ class Universe(base):
         
         #Calculate intersection
         intersection = prev_points + lam * d
-        intersection[:, 0] %= self.size_x
-        intersection[:, 1] %= self.size_y
+        intersection = self.apply_pbc( pos = intersection.reshape(-1, 2) )
 
         #-------------------------------------
         #Check if intersection is between old positions and new positions
@@ -989,8 +1246,8 @@ class Universe(base):
         p_inter = self.apply_pbc_vector(p_inter)
 
         prev_pos = p-d
-        prev_pos[:, 0] %= self.size_x
-        prev_pos[:, 1] %= self.size_y
+
+        prev_pos = self.apply_pbc(pos = prev_pos.reshape(-1, 2))
         
         prev_inter = intersection - prev_pos
         prev_inter = self.apply_pbc_vector(prev_inter)
@@ -1080,9 +1337,6 @@ class Universe(base):
 
         len_norm = np.linalg.norm(final_norm, axis = 1)
 
-        final_intersection[:, 0] %= self.size_x
-        final_intersection[:, 1] %= self.size_y
-
         if not ( np.all( np.abs( len_norm - 1.) < 1E-8) == True and np.all( final_intersection[:, 0] < self.size_x ) == True and np.all( final_intersection[:, 1] < self.size_y ) == True):
 
             print('Norm')
@@ -1104,7 +1358,6 @@ class Universe(base):
             raise ValueError("Normals are not normalized! Saved actual states as debug_points.npy and debug_displace.npy!")
 
         return final_norm, final_intersection
-
     
                     
 
@@ -1117,7 +1370,7 @@ class Universe(base):
             if self.u_storage.shape[0] == self.nsteps // self.nstxout: return 0
         except: pass
         
-        self.u_storage  = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
+        self.u_storage  = np.zeros( (0, self.N, 2), dtype = np.float32 )
         self.time_array = np.zeros( (0)                   , dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
@@ -1142,7 +1395,7 @@ class Universe(base):
             if self.w_storage.shape[0] == self.nsteps // self.nstxout: return 0
         except: pass
         
-        self.w_storage  = np.zeros( (0, self.N, self.dim ), dtype = np.float32 )
+        self.w_storage  = np.zeros( (0, self.N, 2 ), dtype = np.float32 )
         self.time_array = np.zeros( (0)                   , dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
@@ -1229,6 +1482,85 @@ class Universe(base):
             dr = u_storage_analysis[:-lag, :, :] - u_storage_analysis[lag:, :, :]
 
             sqdist = np.square(dr).sum(axis=-1)
+
+            msd[i]             = sqdist.mean()
+            sd_per_particle[i] = sqdist.mean(axis = 0)
+
+        #Convert lagtimes array to physical time
+        tau = np.float32(lagtimes)
+        tau = tau * self.dt * self.nstxout
+
+        return tau, msd, sd_per_particle
+    
+    def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None):
+
+        """
+        Mean Square Displacement in one dimension
+
+        Calculate the Mean Square Displacement of the particles for different lag times.
+
+        Parameters
+        ----------
+
+        direction := str
+            Direction (x,y) in which the MSD is calculated
+        skip := float
+            Skip lag times to decrease calculation time (ns)
+        begin := float
+            Start time for analysis (ns)
+        stop := float
+            Stop time for analysis (ns)
+        """
+
+        if direction == 'x': direction = 0
+        elif direction == 'y': direction = 1
+        else: raise ValueError('Could not handle request! Use x or y!')
+        
+        if stop == None: stop = self.nsteps * self.dt
+ 
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        
+        #Convert time to frames
+        begin = int( np.round( begin / self.dt / self.nstxout ) )
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
+        skip  = int( np.round( skip  / self.dt ) )
+
+        assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
+        
+        #Number of steps for analysis
+        nsteps_analysis = stop - begin
+
+        print(f"Calculating MSD...")
+        print(f"Start: Frame {begin}")
+        print(f"Stop : Frame {stop}")
+        print(f"Skip : Frame {skip}")
+        print(f"Frames: {nsteps_analysis}")
+        print("")
+
+
+        #Load data
+        self.load_data_unwrap()
+
+        #Lag times at which MSD is evaluated
+        lagtimes = np.arange(0, nsteps_analysis, skip)
+
+        #Storage arrays
+        msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)
+        sd_per_particle = np.zeros( (lagtimes.shape[0], self.N), dtype = np.float32)
+
+        u_storage_analysis = self.u_storage[begin:stop][:, :, direction]
+
+        assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
+
+        #Evalulate lagtimes
+        for i, lag in tqdm(enumerate(lagtimes), total = lagtimes.shape[0]):
+
+            if i == 0: continue
+
+            dr = u_storage_analysis[:-lag, :] - u_storage_analysis[lag:, :]
+
+            sqdist = np.square(dr)
 
             msd[i]             = sqdist.mean()
             sd_per_particle[i] = sqdist.mean(axis = 0)
