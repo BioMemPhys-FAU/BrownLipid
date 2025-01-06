@@ -1447,7 +1447,7 @@ class Universe(base):
         stop  = int( np.round( stop  / self.dt / self.nstxout ) )
         skip  = int( np.round( skip  / self.dt ) )
 
-        assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
+        #assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
         
         #Number of steps for analysis
         nsteps_analysis = stop - begin
@@ -1470,7 +1470,7 @@ class Universe(base):
         msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)
         sd_per_particle = np.zeros( (lagtimes.shape[0], self.N), dtype = np.float32)
 
-        u_storage_analysis = self.u_storage[begin:stop]
+        u_storage_analysis = np.copy( self.u_storage[begin:stop, :, :] )
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
@@ -1549,7 +1549,7 @@ class Universe(base):
         msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)
         sd_per_particle = np.zeros( (lagtimes.shape[0], self.N), dtype = np.float32)
 
-        u_storage_analysis = self.u_storage[begin:stop][:, :, direction]
+        u_storage_analysis = np.copy( self.u_storage[begin:stop, :, direction] )
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
