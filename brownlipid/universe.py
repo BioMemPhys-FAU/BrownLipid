@@ -1045,31 +1045,40 @@ class Universe(base):
         #Lag times at which MSD is evaluated
         lagtimes = np.arange(0, nsteps_analysis, skip)
 
-        #Storage arrays
-        msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)
-        sd_per_particle = np.zeros( (lagtimes.shape[0], self.N), dtype = np.float32)
-
         u_storage_analysis = np.copy( self.u_storage[begin:stop, :, :] )
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
-        #Evalulate lagtimes
-        for i, lag in tqdm(enumerate(lagtimes), total = lagtimes.shape[0]):
-
-            if i == 0: continue
-
-            dr = u_storage_analysis[:-lag, :, :] - u_storage_analysis[lag:, :, :]
-
-            sqdist = np.square(dr).sum(axis=-1)
-
-            msd[i]             = sqdist.mean()
-            sd_per_particle[i] = sqdist.mean(axis = 0)
+        msd, sd_per_particle = self.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = self.N)
+        
 
         #Convert lagtimes array to physical time
         tau = np.float32(lagtimes)
         tau = tau * self.dt * self.nstxout
 
         return tau, msd, sd_per_particle
+
+    @staticmethod
+    @jit(nopython=True, parallel=True)
+    def evaluate_lagtimes(pos, lagtimes, N):
+        
+        #Storage arrays
+        msd             = np.zeros(  lagtimes.shape[0],     dtype = np.float32)
+        sd_per_particle = np.zeros( (lagtimes.shape[0], N), dtype = np.float32)
+
+        #Evalulate lagtimes
+        for i, lag in enumerate(lagtimes):
+
+            if i == 0: continue
+
+            dr = pos[:-lag, :, :] - pos[lag:, :, :]
+
+            sqdist = np.square(dr).sum(axis=-1)
+
+            msd[i]             = sqdist.mean()
+            sd_per_particle[i] = np.sum(sqdist, axis = 0) / sqdist.shape[0]
+        
+        return msd, sd_per_particle
     
     def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None):
 
@@ -1133,7 +1142,7 @@ class Universe(base):
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
         #Evalulate lagtimes
-        for i, lag in tqdm(enumerate(lagtimes), total = lagtimes.shape[0]):
+        for i, lag in enumerate(lagtimes):
 
             if i == 0: continue
 
