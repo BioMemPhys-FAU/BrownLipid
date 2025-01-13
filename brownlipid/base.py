@@ -20,7 +20,7 @@ class base:
                  hard_boundaries:                     dict = {},
                       metropolis:                     dict = {},
                  external_forces:                     dict = {},
-                            temp:                    float = 295,
+                            temp:                    float = 298,
                           output:                      str = 'output'
 
                 ):
