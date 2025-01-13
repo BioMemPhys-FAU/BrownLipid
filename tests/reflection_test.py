@@ -156,4 +156,219 @@ def test_heavy_get_normals_circle(m):
 #        np.save(arr = d,           file = 'displace.debug.npy')
 #
 #        raise ValueError('Intersection is not between positions!')
-#
+
+test1 = ( np.array([[ 5.0,  5.0]]), np.array([[ 4.0,  5.0]]), np.array([[ 1., 0.]]), ([0,1],[10.,10.]), np.array([[ 6.,  5.]]), np.array([[ 1.,   0.]]) )
+test2 = ( np.array([[10.0, 10.0]]), np.array([[ 6.0, 12.0]]), np.array([[ 1., 0.]]), ([0,1],[50.,50.]), np.array([[14., 12.]]), np.array([[ 4.,   2.]]) )
+test3 = ( np.array([[10.0, 10.0]]), np.array([[12.0,  9.0]]), np.array([[ 1., 0.]]), ([0,1],[50.,50.]), np.array([[ 8.,  9.]]), np.array([[-2.,  -1.]]) )
+test4 = ( np.array([[ 7.0,  8.0]]), np.array([[ 7.5,  6.0]]), np.array([[ np.sqrt(10)/10., 3*np.sqrt(10)/10.]]), ([0,1],[50.,50.]), np.array([[8.6, 9.3]]), np.array([[ 1.6,  1.3]]) )
+test5 = ( np.array([[ 7.0,  8.0]]), np.array([[ 6.5, 10.5]]), np.array([[ np.sqrt(10)/10., 3*np.sqrt(10)/10.]]), ([0,1],[50.,50.]), np.array([[5.1, 6.3]]), np.array([[-1.9, -1.7]]) )
+test6 = ( np.array([[ 7.0,  8.0]]), np.array([[ 7.5,  6.0]]), np.array([[ np.sqrt(10)/10., 3*np.sqrt(10)/10.]]), ([0,1],[ 8., 9.]), np.array([[0.6, 0.3]]), np.array([[ 1.6,  1.3]]) )
+
+@pytest.mark.parametrize("intersection, p_in, n, pbc_dim, ref_true, ref_vector_true", [test1, test2, test3, test4, test5, test6])
+def test_simple_calc_reflection(intersection, p_in, n, pbc_dim, ref_true, ref_vector_true):
+
+    ref, ref_vector = reflection.calc_reflection(intersection = intersection,
+                                                 p_in         = p_in,
+                                                 n            = n,
+                                                 pbc_dim      = pbc_dim)
+    
+    np.testing.assert_allclose(ref_vector, ref_vector_true)
+    np.testing.assert_allclose(ref, ref_true)
+
+    #----------------------------------------------------
+    #Test reflection
+    pos_p_prev = -1 * ( p_in - intersection )
+    pos_p_prev = utils.apply_pbc_vector(vec = pos_p_prev, pbc_dim = pbc_dim)
+    pos_ref    = utils.apply_pbc_vector(vec = ref_vector, pbc_dim = pbc_dim)
+
+    dot_pp = np.sum(pos_p_prev  * n, axis = 1)
+    dot_pr = np.sum(pos_ref     * n, axis = 1)
+
+    dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
+    dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
+
+    np.testing.assert_allclose(dot_pp, dot_pr)
+
+#@pytest.mark.parametrize("m", [ (np.array([50, 50])), (np.array([65.23, 40.231])), (np.array([12.343, 78.4321])),
+#                                (np.array([0, 0])), (np.array([0, 100])), (np.array([100, 0])), (np.array([100, 100])),
+#                                (np.array([0, 50])), (np.array([50, 0])), (np.array([100, 50])), (np.array([50, 100]))  ] )
+@pytest.mark.parametrize("m", [ (np.array([125, 125])), (np.array([65.23, 40.231])), (np.array([12.343, 78.4321])),
+                                (np.array([0, 0])),   (np.array([0, 250])), (np.array([250, 0])),   (np.array([250, 250])),
+                                (np.array([0, 125])), (np.array([125, 0])), (np.array([250, 125])), (np.array([125, 250]))  ] )
+def test_heavy_calc_reflection_out(m):
+
+    #----------------------------------------------------
+    #Set
+    N = 100000
+    theta = np.linspace(0, 2*np.pi, N)[1:]
+    r = 35
+    m = m.reshape(1, 2)
+    pbc_dim = ([0, 1], [250, 250])
+    x_circ = r * np.cos(theta) + m[:, 0]
+    y_circ = r * np.sin(theta) + m[:, 1]
+    circ   = np.vstack((x_circ, y_circ)).T
+
+    norm   = m - circ
+
+    in_circ = circ + ( 0.5  * np.random.rand(N-1, 1)+.30) * norm + np.random.randn(N-1, 1)
+
+    check_dist2mid = utils.apply_pbc_vector(vec = (in_circ - m), pbc_dim = pbc_dim)
+    check_dist2mid = np.linalg.norm( check_dist2mid, axis = 1) < (r - 5)
+    np.testing.assert_allclose(check_dist2mid, np.repeat(True, N-1))
+
+    d = in_circ - circ
+    #----------------------------------------------------
+    #Test reflection
+    #d_norm = utils.apply_pbc_vector(vec = np.copy(d), pbc_dim = pbc_dim)
+    d_norm = np.linalg.norm(d, axis = 1)
+    
+    #np.testing.assert_allclose(d_norm < r, np.repeat(True, N-1))
+    
+    #----------------------------------------------------
+    #Calculate normals and intersection
+    norm, intersection = reflection.get_normals_circle(prev_points = circ,
+                                                       points      = in_circ, 
+                                                       d           = d,
+                                                       mid         = m,
+                                                       r           = r - 5,
+                                                       pbc_dim     = pbc_dim)
+
+
+    circ2intersection = intersection - circ
+    circ2intersection = utils.apply_pbc_vector(vec = circ2intersection, pbc_dim = pbc_dim)
+    circ2intersection = np.linalg.norm( circ2intersection, axis = 1)
+    
+    #----------------------------------------------------
+    #Calculate reflection
+    ref, ref_vector = reflection.calc_reflection(intersection = intersection,
+                                                 p_in         = in_circ,
+                                                 n            = norm,
+                                                 pbc_dim      = pbc_dim)
+    
+
+    #Test if length of displace vector is preserved
+    d_norm_test = circ2intersection + np.linalg.norm( utils.apply_pbc_vector(vec=ref_vector,pbc_dim=pbc_dim), axis = 1)
+ 
+    np.testing.assert_allclose( d_norm_test, d_norm )
+
+    #Test if all points are in circle
+    dist2mid      = utils.apply_pbc_vector( vec = (ref - m), pbc_dim = pbc_dim )
+    dist2mid      = np.linalg.norm(dist2mid, axis = 1)
+    dist2mid_bool = dist2mid > (r - 5)
+
+    np.save(arr=circ[~dist2mid_bool], file = "failcirc")
+    np.save(arr=in_circ[~dist2mid_bool], file="failincirc")
+    np.save(arr=ref[~dist2mid_bool], file = "failref")
+    np.save(arr=intersection[~dist2mid_bool], file = "failinter")
+    """   
+    np.save(arr=circ, file = "failcirc")
+    np.save(arr=in_circ, file="failincirc")
+    np.save(arr=ref, file = "failref")
+    np.save(arr=intersection, file = "failinter")
+    """
+    np.testing.assert_allclose(dist2mid_bool, np.repeat(True, N-1))
+    
+    #----------------------------------------------------
+    #Test reflection
+    pos_p_prev = -1 * ( in_circ - intersection )
+    pos_p_prev = utils.apply_pbc_vector(vec = pos_p_prev, pbc_dim = pbc_dim)
+    pos_ref    = utils.apply_pbc_vector(vec = ref_vector, pbc_dim = pbc_dim)
+
+    dot_pp = np.sum(pos_p_prev  * norm, axis = 1)
+    dot_pr = np.sum(pos_ref     * norm, axis = 1)
+
+    dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
+    dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
+
+    np.testing.assert_allclose(dot_pp, dot_pr)
+
+@pytest.mark.parametrize("m", [ (np.array([125, 125])), (np.array([65.23, 40.231])), (np.array([12.343, 78.4321])),
+                                (np.array([0, 0])),   (np.array([0, 250])), (np.array([250, 0])),   (np.array([250, 250])),
+                                (np.array([0, 125])), (np.array([125, 0])), (np.array([250, 125])), (np.array([125, 250]))  ] )
+def test_heavy_calc_reflection_in(m):
+
+    #----------------------------------------------------
+    #Set
+    N = 100000
+    theta = np.linspace(0, 2*np.pi, N)[1:]
+    r = 35
+    m = m.reshape(1, 2)
+    pbc_dim = ([0, 1], [250, 250])
+    x_circ = r * np.cos(theta) + m[:, 0]
+    y_circ = r * np.sin(theta) + m[:, 1]
+    circ   = np.vstack((x_circ, y_circ)).T
+
+    norm   = m - circ
+
+    in_circ = circ + ( 0.5  * np.random.rand(N-1, 1)+.30) * norm + np.random.randn(N-1, 1)
+
+    check_dist2mid = utils.apply_pbc_vector(vec = (in_circ - m), pbc_dim = pbc_dim)
+    check_dist2mid = np.linalg.norm( check_dist2mid, axis = 1) < (r - 5)
+    np.testing.assert_allclose(check_dist2mid, np.repeat(True, N-1))
+
+    d = circ - in_circ
+    #----------------------------------------------------
+    #Test reflection
+    #d_norm = utils.apply_pbc_vector(vec = np.copy(d), pbc_dim = pbc_dim)
+    d_norm = np.linalg.norm(d, axis = 1)
+    
+    #np.testing.assert_allclose(d_norm < r, np.repeat(True, N-1))
+    
+    #----------------------------------------------------
+    #Calculate normals and intersection
+    norm, intersection = reflection.get_normals_circle(prev_points = in_circ,
+                                                       points      = circ, 
+                                                       d           = d,
+                                                       mid         = m,
+                                                       r           = r - 5,
+                                                       pbc_dim     = pbc_dim)
+
+
+    circ2intersection = intersection - in_circ
+    circ2intersection = utils.apply_pbc_vector(vec = circ2intersection, pbc_dim = pbc_dim)
+    circ2intersection = np.linalg.norm( circ2intersection, axis = 1)
+    
+    #----------------------------------------------------
+    #Calculate reflection
+    ref, ref_vector = reflection.calc_reflection(intersection = intersection,
+                                                 p_in         = circ,
+                                                 n            = norm,
+                                                 pbc_dim      = pbc_dim)
+    
+
+    #Test if length of displace vector is preserved
+    d_norm_test = circ2intersection + np.linalg.norm( utils.apply_pbc_vector(vec=ref_vector,pbc_dim=pbc_dim), axis = 1)
+ 
+    np.testing.assert_allclose( d_norm_test, d_norm )
+
+    #Test if all points are in circle
+    dist2mid      = utils.apply_pbc_vector( vec = (ref - m), pbc_dim = pbc_dim )
+    dist2mid      = np.linalg.norm(dist2mid, axis = 1)
+    dist2mid_bool = dist2mid < (r - 5)
+
+    np.save(arr=circ[~dist2mid_bool], file = "failcirc")
+    np.save(arr=in_circ[~dist2mid_bool], file="failincirc")
+    np.save(arr=ref[~dist2mid_bool], file = "failref")
+    np.save(arr=intersection[~dist2mid_bool], file = "failinter")
+    """   
+    np.save(arr=circ, file = "failcirc")
+    np.save(arr=in_circ, file="failincirc")
+    np.save(arr=ref, file = "failref")
+    np.save(arr=intersection, file = "failinter")
+    """
+    np.testing.assert_allclose(dist2mid_bool, np.repeat(True, N-1))
+    
+    #----------------------------------------------------
+    #Test reflection
+    pos_p_prev = -1 * ( circ - intersection )
+    pos_p_prev = utils.apply_pbc_vector(vec = pos_p_prev, pbc_dim = pbc_dim)
+    pos_ref    = utils.apply_pbc_vector(vec = ref_vector, pbc_dim = pbc_dim)
+
+    dot_pp = np.sum(pos_p_prev  * norm, axis = 1)
+    dot_pr = np.sum(pos_ref     * norm, axis = 1)
+
+    dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
+    dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
+
+    np.testing.assert_allclose(dot_pp, dot_pr)
+

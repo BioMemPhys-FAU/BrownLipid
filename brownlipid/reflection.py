@@ -70,20 +70,18 @@ def get_normals_circle(prev_points, points, d, mid, r, pbc_dim):
     lam1 = np.abs( lam1 )
     lam2 = np.abs( lam2 )
 
-    lam = np.zeros( lam1.shape )
+    lam = np.ones( lam1.shape ) * np.inf
 
-    lam[lam1 < lam2] = lam1[lam1 < lam2]
-    lam[lam2 < lam1] = lam2[lam2 < lam1]
-
+    lam[ (lam1 < lam2) ] = lam1[ (lam1 < lam2) ]
+    lam[ (lam2 < lam1) ] = lam2[ (lam2 < lam1) ]
+    
     lam = lam.reshape(-1, 1)
 
     #Calculate intersection
     intersection = prev_points + lam * d
     
     #Apply periodic boundary conditions
-    for j, size in zip(pbc_dim[0], pbc_dim[1]):
-        intersection[:, j] = np.where(intersection[:, j] >    size / 2, intersection[:, j] - size, intersection[:, j])
-        intersection[:, j] = np.where(intersection[:, j] <= - size / 2, intersection[:, j] + size, intersection[:, j])
+    for j, size in zip(pbc_dim[0], pbc_dim[1]): intersection[:, j] %= size
 
     #-------------------------------------
     #Calculate normal vector
@@ -122,37 +120,11 @@ def calc_reflection(intersection, p_in, n, pbc_dim):
         d_rest[:, j] = np.where(d_rest[:, j] >    size / 2, d_rest[:, j] - size, d_rest[:, j])
         d_rest[:, j] = np.where(d_rest[:, j] <= - size / 2, d_rest[:, j] + size, d_rest[:, j])
 
-    reflection_vector =  d_rest - 2 * np.sum(d_rest * n, axis = 1).reshape(-1, 1) * n
+    reflection_vector = d_rest - 2 * np.sum(d_rest * n, axis = 1).reshape(-1, 1) * n
     
     reflection = intersection + reflection_vector
 
     #Apply periodic boundary conditions
-    for j, size in zip(pbc_dim[0], pbc_dim[1]):
-        reflection[:, j] = np.where(reflection[:, j] >    size / 2, reflection[:, j] - size, reflection[:, j])
-        reflection[:, j] = np.where(reflection[:, j] <= - size / 2, reflection[:, j] + size, reflection[:, j])
-
-    """
-    #----------------------------------------------------
-    #Test reflection
-    pos_p_prev = -1 * d_rest
-    pos_ref    = utils.apply_pbc_vector(reflection_vector)
-
-    dot_pp = np.sum(pos_p_prev  * n, axis = 1)
-    dot_pr = np.sum(pos_ref     * n, axis = 1)
-
-    dot_pp /= np.linalg.norm(pos_p_prev, axis = 1)
-    dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
-
-    if not np.allclose(dot_pr, dot_pp) and not np.allclose(dot_pp, dot_pr):
-
-        print(dot_pr)
-        print(dot_pp)
-        
-        print('Intersection:')
-        print(intersection)
-
-        raise ValueError("In angle is not equal out angle")
-    #----------------------------------------------------
-    """
+    for j, size in zip(pbc_dim[0], pbc_dim[1]): reflection[:, j] %= size
 
     return reflection, reflection_vector
