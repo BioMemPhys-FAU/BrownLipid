@@ -126,5 +126,5 @@ def calc_reflection(intersection, p_in, n, pbc_dim):
 
     #Apply periodic boundary conditions
     for j, size in zip(pbc_dim[0], pbc_dim[1]): reflection[:, j] %= size
-
+    
     return reflection, reflection_vector
