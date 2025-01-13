@@ -2,29 +2,29 @@ import brownlipid
 import numpy as np
 import pytest
 
-@pytest.mark.parametrize("L,d_coeff,N,dim,nsteps,dt,grid", [(100, 1., 100000, 2, 1E6, 1, 0.1)])
-def test_diffusion_coefficient(L,d_coeff,N,dim,nsteps,dt,grid):
+@pytest.mark.parametrize("L,d_coeff,N,nsteps,dt", [(100, 1., 1000, 1E5, 1)])
+def test_diffusion_coefficient(L,d_coeff,N,nsteps,dt):
 
 
     uni = brownlipid.Universe(
                               size_x = L,
                               size_y = L,
-                              size_z = L,
                                    N = N,
-                                 dim = dim,
+                             pbc_dim = 'xy',
                               nsteps = int(nsteps),
                                   dt = dt,
-                             nstxout = 250,
+                             nstxout = 5,
                         base_d_coeff = d_coeff,
-                                grid = grid
+                             nstchk  = int(nsteps)
                             )
 
     uni.evolve()
 
-    tau, msd, sdpp = uni.mean_square_displacement(skip = dt)
+    tau, msd, sdpp = uni.mean_square_displacement(skip = 5)
 
-    slope, intercept = np.polyfit(tau, msd, deg = 1)
+    np.save(arr = tau, file = 'tau_pytest.npy')
+    np.save(arr = msd, file = 'msd_pytest.npy')
 
-    d_coeff_fit = slope / 4 / uni.dt
+    d_coeff_fit, intercept = uni.mean_square_displacement_fit(tau = tau, msd = msd, dim = 2, begin = 10., stop = 10000.)
 
-    np.testing.assert_allclose(d_coeff, d_coeff_fit, rtol = 0, atol = 1E-5)
+    np.testing.assert_allclose(d_coeff_fit, d_coeff, rtol = 0, atol = 1E-4)

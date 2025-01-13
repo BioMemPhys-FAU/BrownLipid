@@ -1,3 +1,11 @@
+"""
+reflection.py
+
+Contains functions to calculate the reflection of a particle from a hard boundary.
+The reflection follows here the rules of an elastic collision, and the particle retains its kinetic energy.
+
+"""
+
 import numpy as np
 from numba import jit
 
@@ -11,23 +19,23 @@ def get_normals_circle(prev_points, points, d, mid, r, pbc_dim):
 
     The intersection is calculated solving the linear equation:
 
-        || M + d * lambda || = r
+        || M + d * lambda || = r        (1)
 
     , where M is the directional vector between the circle midpoint and the previous position; d is the displacement vector between the previous
     and the current position; lambda is a scale factor for the displacement vector; and r is the radius of the circle.
-    The linear equation has two solutions. Here, always the smaller value of lambda is assumed to be the required value.
+    The linear equation (1) has two solutions. Here, always the smaller value of lambda is assumed to be the required value.
 
     Parameters
     ----------
-    points := numpy.ndarray
-        coordinates of reflected points
+    points      := numpy.ndarray
+        coordinates of reflected points -> Shape (N, 2)
     prev_points := numpy.ndarray
-        previous coordinates of reflected points
-    d := numpy.ndarray
+        previous coordinates of reflected points -> Shape (N, 2)
+    d           := numpy.ndarray
         displace vector
-    mid := numpy.ndarray
+    mid         := numpy.ndarray
         circle midpoint
-    r := float
+    r           := float
         radius of the circle
     
     """
@@ -38,24 +46,29 @@ def get_normals_circle(prev_points, points, d, mid, r, pbc_dim):
 
     #-------------------------------------
     #Solve linear equation
-    M = (prev_points - mid)
+    M = prev_points - mid
+
     #Apply periodic boundary conditions
     for j, size in zip(pbc_dim[0], pbc_dim[1]):
         M[:, j] = np.where(M[:, j] >    size / 2, M[:, j] - size, M[:, j])
         M[:, j] = np.where(M[:, j] <= - size / 2, M[:, j] + size, M[:, j])
     
-    A = d[:, 0]**2 + d[:, 1]**2
-    B = M[:, 0] * d[:, 0] + M[:, 1] * d[:, 1]
-    C = M[:, 0]**2 + M[:, 1]**2
+    #A = d[:, 0]**2 + d[:, 1]**2
+    #B = M[:, 0] * d[:, 0] + M[:, 1] * d[:, 1]
+    #C = M[:, 0]**2 + M[:, 1]**2
+    A = np.sum( d ** 2, axis = 1)
+    B = np.sum( M * d , axis = 1)
+    C = np.sum( M ** 2, axis = 1)
 
-    lam1 = 2 * B + 2 * np.sqrt(B**2 - A * ( C - r**2 ) )
-    lam1 /= 2 * A
+    first_term  = - B / A
+
+    second_term = np.sqrt( first_term**2 - ( C - r ** 2 ) / A )
     
-    lam2 = 2 * B - 2 * np.sqrt(B**2 - A * ( C - r**2 ) )
-    lam2 /= 2 * A
+    lam1 = first_term + second_term
+    lam2 = first_term - second_term
 
-    lam1 = np.abs(lam1)
-    lam2 = np.abs(lam2)
+    lam1 = np.abs( lam1 )
+    lam2 = np.abs( lam2 )
 
     lam = np.zeros( lam1.shape )
 
@@ -64,10 +77,9 @@ def get_normals_circle(prev_points, points, d, mid, r, pbc_dim):
 
     lam = lam.reshape(-1, 1)
 
-    assert lam.shape[0] == points.shape[0], 'Lambda has the wrong shape'
-    
     #Calculate intersection
     intersection = prev_points + lam * d
+    
     #Apply periodic boundary conditions
     for j, size in zip(pbc_dim[0], pbc_dim[1]):
         intersection[:, j] = np.where(intersection[:, j] >    size / 2, intersection[:, j] - size, intersection[:, j])

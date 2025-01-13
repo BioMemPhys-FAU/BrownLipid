@@ -17,6 +17,7 @@ from . import utils
 from . import force
 from . import reflection
 from . import metropolis
+from . import clean
 
 class Universe(base):
 
@@ -87,21 +88,17 @@ class Universe(base):
             self.frame = i
 
             #Move particles in time
-            if not any(self.external_forces): self.forward_in_time()
-            else: self.forward_in_time_external_forces()
+            self.forward_in_time()
             
             #Apply hard wall boundary conditions
             self.w_universe = self.apply_hard_wall(pos = self.w_universe)
             
-            #Apply periodic boundary conditions
-            self.w_universe = self.apply_pbc(pos = self.w_universe)
-            
             #Apply hard boundaries
             self.hard_boundaries()
             
-            #Check diffusion coefficients
-            self.update_diffusion()
-
+            #Apply periodic boundary conditions
+            self.w_universe = self.apply_pbc(pos = self.w_universe)
+            
             #-----------------------------------------------------------------------------------------------------------------
             #Store particle positions
 
@@ -181,20 +178,16 @@ class Universe(base):
         for i, size in enumerate([self.size_x, self.size_y]): init_pos[:, i] *= size
         
         #----------------------------------------------------------------------------------------------------------
-        #Clean restricted areas
-        #Take care of domains with hard boundaries
+        #Clean restricted areas and distribute particles respecting pair interactions
 
-        if any(self.external_forces):
-            if any( self.hard_boundaries_geometry ): init_pos = self.clean_domains_minimum_distance(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
-            elif any( self.domain_geometry ): init_pos = self.clean_domains_minimum_distance(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
-            else: init_pos = self.clean_domains_minimum_distance(init_pos = init_pos, geometry_collection = {})
+        init_pos = clean.clean_domains(init_pos            = init_pos,
+                                       geometry_collection = self.hard_boundaries_geometry,
+                                       N                   = self.N,
+                                       lj_sig              = self.lj_sig,
+                                       pbc_dim             = self.pbc_dim,
+                                       size_x              = self.size_x,
+                                       size_y              = self.size_y)
 
-        else:
-
-             if any( self.hard_boundaries_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
-             elif any( self.domain_geometry ): init_pos = self.clean_domains(init_pos = init_pos, geometry_collection = self.hard_boundaries_geometry)
-             else: pass
-        
         #----------------------------------------------------------------------------------------------------------
         #Make some tests if the particle coordinates are in the box
         assert init_pos[:, 0].max() <= self.size_x 
@@ -209,218 +202,48 @@ class Universe(base):
 
         return init_pos
 
-    def clean_domains(self, init_pos, geometry_collection):
-
-        """
-        The function should remove initials position of particles from domains (either hard boundaries or different diffusion coefficients).
-
-        Parameters
-        ----------
-
-        init_pos := numpy.ndarray
-            Array of initial positions that should be cleaned
-        geometry_collection := dict
-            Dictionary containing information about the domains geometries
-
-        Return
-        ------
-
-        cleaned_init_pos := numpy.ndarray
-            Array of cleaned initial positions
-
-        """
-
-        #Check if there are no geometry entries
-        if not any( geometry_collection ): return init_pos
-
-        print('Found applied geometries!')
-        print('Start resampling...')
-
-        cleaned_init_pos = np.copy( init_pos )
-
-        check = True
-        
-        #Iterate as long as there are particles in domains
-        while check:
-        
-            #Init empty array to store particles indices in domains
-            in_bound_idx = np.array([], dtype = np.int64)
-
-            #Iterate over geometries
-            for key, geometry in geometry_collection.items():
-
-                #Circular domains
-                if 'c' in key:
-
-                    #Get indices of particles in circular domains
-                    in_bound_idx_key = utils.check_circ_cond(pos     = cleaned_init_pos,
-                                                            mid     = geometry[0].reshape(1, 2),
-                                                            r       = geometry[1],
-                                                            pbc_dim = self.pbc_dim)
-
-                #Rectangular domains
-                elif 'p' in key:
-
-                    #Get indices of particles in rectangular domains
-                    in_bound_idx_key = utils.check_square_cond(pos = cleaned_init_pos,
-                                                              Lx  = geometry[4],
-                                                              Ly  = geometry[5],
-                                                              mid = geometry[6].reshape(1, 2))  
-                
-                else: raise ValueError(f'Key {key} not known!') 
-                
-                #Append to larger storage array
-                in_bound_idx = np.append( in_bound_idx, in_bound_idx_key )
-
-            if not ( in_bound_idx.size > 0 ): 
-                check = False
-                continue
-
-            print(f"There are {in_bound_idx.shape[0]} particles that need to be resampled! Please stay patienced!")
-            
-            #Resample only particle positions inside the boundaries
-            cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], 2 )           
-
-            #Scale the coordinates to the right size
-            for i, size in enumerate([self.size_x, self.size_y]): cleaned_init_pos[ in_bound_idx , i] *= size
-        
-        print('Resampling finished! :-)')
-        print('Good luck with your simulations!')
-
-        return cleaned_init_pos
-    
-    def clean_domains_minimum_distance(self, init_pos, geometry_collection):
-
-        """
-        The function should remove initials position of particles from domains (either hard boundaries or different diffusion coefficients).
-
-        Parameters
-        ----------
-
-        init_pos := numpy.ndarray
-            Array of initial positions that should be cleaned
-        geometry_collection := dict
-            Dictionary containing information about the domains geometries
-
-        Return
-        ------
-
-        cleaned_init_pos := numpy.ndarray
-            Array of cleaned initial positions
-
-        """
-
-        print('Found applied geometries!')
-        print('Start resampling...')
-
-        cleaned_init_pos = np.copy( init_pos )
-
-        check = True
-        
-        #Iterate as long as there are particles in domains
-        while check:
-        
-            #Init empty array to store particles indices in domains
-            in_bound_idx = np.array([], dtype = np.int64)
-
-            #Iterate over geometries
-            for key, geometry in geometry_collection.items():
-
-                #Circular domains
-                if 'c' in key:
-
-                    #Get indices of particles in circular domains
-                    in_bound_idx_key = utils.check_circ_cond(pos     = cleaned_init_pos,
-                                                            mid     = geometry[0].reshape(1, 2),
-                                                            r       = geometry[1],
-                                                            pbc_dim = self.pbc_dim)
-
-                #Rectangular domains
-                elif 'p' in key:
-
-                    #Get indices of particles in rectangular domains
-                    in_bound_idx_key = utils.check_square_cond(pos = cleaned_init_pos,
-                                                              Lx  = geometry[4],
-                                                              Ly  = geometry[5],
-                                                              mid = geometry[6].reshape(1, 2))  
-                
-                else: raise ValueError(f'Key {key} not known!') 
-                
-                #Append to larger storage array
-                in_bound_idx = np.append( in_bound_idx, in_bound_idx_key )
-
-            #--------------------------------------------------------------
-            #Too close
-            dist_mat, vec_mat = utils.distance_matrix_NxN(pos = cleaned_init_pos, N = self.N, pbc_dim = self.pbc_dim)
-            dist_mat = dist_mat.min(axis = 1)
-
-            close_idx = np.where( dist_mat < (self.lj_sig * 2**(1/6) * 0.7 )**2 )
-
-            in_bound_idx = np.append( in_bound_idx, close_idx )
-
-            if not ( in_bound_idx.size > 0 ): 
-                check = False
-                continue
-
-            in_bound_idx = np.unique(in_bound_idx)
-
-            print(f"There are {in_bound_idx.shape[0]} particles that need to be resampled! Please stay patienced!")
-            
-            #Resample only particle positions inside the boundaries
-            cleaned_init_pos[ in_bound_idx ] = np.random.rand( in_bound_idx.shape[0], 2 )           
-
-            #Scale the coordinates to the right size
-            for i, size in enumerate([self.size_x, self.size_y]): cleaned_init_pos[ in_bound_idx , i] *= size
-        
-        print('Resampling finished! :-)')
-        print('Good luck with your simulations!')
-
-        return cleaned_init_pos
-    
-    
     #--------------------------------------------------------------------------------------------------------------
-    # Function for the evolution of the system
-
-    def forward_in_time(self):
-
-        """
-        Displace particle positions according to the Brown's Diffusion.
-        For each particle and for every dimensions a random number from a standard normal distribution is drawn.
-        The random number is then scaled by a factor taking a diffusion coefficient into account:
-
-            sqrt( 2 * D * dt) (1)
-
-        Equation 1 takes the diffusion coefficient (D) and the time step (dt) of the simulation.
-
-        In this implementation D is an array (self.d_coeffs) that stores the diffusion coefficient of every particle.
-        The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
-        """
-
-        #Calculate the factor for every particle.
-        factor = np.sqrt( 2 * self.d_coeffs * self.dt ).reshape(-1, 1)
-
-        #Calculate the displace vector
-        self.displace = factor * np.random.randn( self.N, 2 )
-
-        #Store previous positions
-        self.w_universe_prev = np.copy( self.w_universe )
-
-        #Move particles
-        self.w_universe += self.displace
-
     def lennard_jones(self):
 
-        if (self.frame % self.lj_nstlist) == 1: 
+        """
+        Compute the Lennard-Jones forces acting on each particle in the system.
+
+        This function calculates inter-particle forces based on the Lennard-Jones potential, using a pairlist
+        to optimize performance. The pairlist is either generated or updated depending on the current simulation frame.
+
+        Functions Called:
+        -----------------
+        1. `force.generate_pairlist`:
+           - Generates the pairlist, which contains pairs of particles within the cutoff distance,
+             considering periodic boundary conditions (PBC).
+        2. `force.update_pairlist`:
+           - Updates the existing pairlist for subsequent frames, ensuring pairs within the cutoff distance are maintained.
+        3. `force.calculate_force`:
+           - Computes the Lennard-Jones forces for all particle pairs in the pairlist based on their distances.
+
+        Returns:
+        --------
+        force_per_particle : numpy.ndarray
+            A (N, 2) array representing the forces acting on each particle in the system.
+        """
+
+        #Generate new pair list
+        if (self.frame % self.lj_nstlist) == 1 or self.lj_nstlist == 1: 
             rij, rij_sq, mask, self.pairlist = force.generate_pairlist(pos       = self.w_universe,
                                                                        pbc_dim   = self.pbc_dim,
                                                                        N         = self.N,
                                                                        lj_buffer = self.lj_buffer,
                                                                        lj_cutoff = self.lj_cutoff)
+
+        #Update distances in the pairlist
         else: 
-            rij, rij_sq, mask = force.update_pairlist(pos       = self.w_universe,
-                                                      pairlist  = self.pairlist,
-                                                      pbc_dim   = self.pbc_dim,
-                                                      lj_cutoff = self.lj_cutoff)
+            rij, rij_sq, mask                = force.update_pairlist(pos         = self.w_universe,
+                                                                     pairlist    = self.pairlist,
+                                                                     pbc_dim     = self.pbc_dim,
+                                                                     lj_cutoff   = self.lj_cutoff)
+
+
+        if not rij_sq.size > 0: return np.zeros( (self.N, 2), dtype = np.float32 ) 
 
         assert rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
 
@@ -435,7 +258,7 @@ class Universe(base):
 
         return force_per_particle
     
-    def forward_in_time_external_forces(self):
+    def forward_in_time(self):
 
         """
         Displace particle positions according to the Brown's Diffusion.
@@ -455,10 +278,15 @@ class Universe(base):
         #Calculate the factor for every particle.
         factor = np.sqrt( 2 * diff_dt )
 
-        force = self.lennard_jones()
+        if any(self.external_forces):
 
-        #Calculate the displace vector
-        self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
+            #Calculate forces between particles
+            force = self.lennard_jones()
+
+            #Calculate the displace vector
+            self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
+
+        else: self.displace = factor * np.random.randn( self.N, 2 )
 
         #Store previous positions
         self.w_universe_prev = np.copy( self.w_universe )
@@ -507,64 +335,6 @@ class Universe(base):
 
         return pos
     
-    #--------------------------------------------------------------------------------------------------------------
-    # Function for different geometric tasks
-    
-    #--------------------------------------------------------------------------------------------------------------
-    # Function for different geometric tasks
-
-    def update_diffusion(self):
-        
-        if not any(self.domain_geometry): pass
-
-        else:
-
-            self.d_coeffs[:] = self.base_d_coeff
-
-            for key, geometry in self.domain_geometry.items():
-
-                #Circular domains
-                if 'c' in key:
-                    
-                    #Calculate real distances
-                    #--------------------------------------------------------------------------------
-                    mid = self.domain_geometry[key][0].reshape(1,2)
-                    r   = self.domain_geometry[key][1]
-                    #--------------------------------------------------------------------------------
-
-                    index = utils.check_circ_cond(pos     = self.w_universe,
-                                                 mid     = mid,
-                                                 r       = r,
-                                                 pbc_dim = self.pbc_dim)
-                    
-                    if not index.size > 0: continue
-
-                    self.d_coeffs[ index ] = self.domain_geometry[key][2]
-                
-                #Square hard boundary
-                elif 'p' in key:
-                    
-                    #Calculate real distances
-                    #--------------------------------------------------------------------------------
-                    edges = self.domain_geometry[key][0:4]
-                    Lx    = self.domain_geometry[key][4]
-                    Ly    = self.domain_geometry[key][5] 
-                    mid   = self.domain_geometry[key][6].reshape(1, 2)
-                    #--------------------------------------------------------------------------------
-                    
-                    index = utils.check_square_cond(pos = self.w_universe,
-                                                   Lx = Lx,
-                                                   Ly = Ly,
-                                                   mid = mid)
-
-
-                    if not index.size > 0: continue
-                    
-                    self.d_coeffs[ index ] = self.domain_geometry[key][7]
-
-                else:
-                    raise ValueError("Currently I cannot handle the provided geometry.")
-
     #----------------------------------------------------------------------------------------------------------------------------------------
     
     def double_metropolis_scheme(self, index, prev_index ):
@@ -610,44 +380,54 @@ class Universe(base):
         #Case A.2 -> FALSE: Particle was not in a domain and wants to enter this domain now -> METROPOLIS
 
         #Case B
-        not_index = np.setdiff1d(ar1 = prev_index, ar2 = index) #Return the unique values in ar1 that are not in ar2.
+        #not_index contains particle indices that leave the domain -> indices that are in prev_index but not in index
+        #assume_unique=True, because no particle can be multiple times in the same domain
+        not_index = np.setdiff1d(ar1 = prev_index, ar2 = index, assume_unique=True) #Return the unique values in ar1 that are not in ar2.
         B = self.in_domains[ not_index ]
         #Case B.1 -> TRUE:  Particle wants to leave domain -> METROPOLIS
         #Case B.2 -> FALSE: Particle stays outside domain -> Do not reflect -> That should only happen if the point in a previous iteration was allowed to leave the domain.
         
 
         #Sort particles for which Metropolis must be called
-        entering_index = index[ ~A ] #Case A.2
+        entering_index = index[ ~A ]    #Case A.2
         leaving_index  = not_index[ B ] #Case B.1
 
         #Some tests
-        assert np.all( B ) == True, 'That should not happen with circles! - 1'
-        assert np.all( leaving_index == not_index), 'That should not happen with circles! - 2'
+        #assert np.all( B ) == True, 'That should not happen with circles! - 1'
+        #assert np.all( leaving_index == not_index), 'That should not happen with circles! - 2'
         
         #Init empty list to collect indices of particles with rejected Metropolis Step
         index_after_metropolis = []
 
         #-----------------------------------------------------------------------------------------------------------------------
         #OUTSIDE -> INSIDE
-        
+
         #Decide for each "entering-applicant" particle independently if it is allowed to enter the domain
         #Iterate over A.2
         for p_index in entering_index:
 
             if self.target_fraction != None:
+                
+                #Calculate changing fraction
                 x_old = self.in_domains.sum()     
                 x_new = self.in_domains.sum() + 1
                 deltaE = metropolis.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = self.target_fraction, forceconstant = self.fconstant)
+                
+                #Entering is accepted
+                if metropolis.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = True
+                #Entering is rejected
+                else: index_after_metropolis.append( p_index ) #Particle will get reflected
 
             elif self.barrier != None:
-                deltaE = self.barrier
+                deltaE = self.bltz_prob
+            
+                #Entering is accepted
+                if metropolis.fast_metropolis_decision(deltaE = deltaE): self.in_domains[ p_index ] = True
+                #Entering is rejected
+                else: index_after_metropolis.append( p_index ) #Particle will get reflected
 
             else: raise ValueError('Could not handle request!')
             
-            #Entering is accepted
-            if metropolis.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = True
-            #Entering is rejected
-            else: index_after_metropolis.append( p_index ) #Particle will get reflected
         
 
         #INSIDE -> OUTSIDE
@@ -657,26 +437,33 @@ class Universe(base):
         for p_index in leaving_index:
 
             if self.target_fraction != None:
+                
+                #Calculate changing fraction
                 x_old = self.in_domains.sum()     
                 x_new = self.in_domains.sum() - 1
+
                 deltaE = metropolis.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = self.target_fraction, forceconstant = self.fconstant)
+                
+                #Leaving is accepted
+                if metropolis.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = False
+                #Leaving is rejected
+                else: index_after_metropolis.append( p_index )
 
             elif self.barrier != None:
-                deltaE = self.barrier
+                deltaE = self.bltz_prob
+                
+                #Leaving is accepted
+                if metropolis.fast_metropolis_decision(deltaE = deltaE): self.in_domains[ p_index ] = False
+                #Leaving is rejected
+                else: index_after_metropolis.append( p_index )
 
             else: raise ValueError('Could not handle request!')
             
-            #Leaving is accepted
-            if metropolis.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = False
-            #Leaving is rejected
-            else: index_after_metropolis.append( p_index )
-
+    
         return np.array(index_after_metropolis)
-
 
     #-----------------------------------------------------------------------------------------------------------------------------
     #Boundaries
-    
     def hard_boundaries(self):
 
         """
@@ -687,6 +474,8 @@ class Universe(base):
 
 
         """
+        
+        self.d_coeffs[:] = self.base_d_coeff
         
         #If called but no geometry for a domain is stored
         if not any(self.hard_boundaries_geometry): pass
@@ -702,41 +491,50 @@ class Universe(base):
                     
                     #--------------------------------------------------------------------------------
                     #Calculate real distances
-                    mid = self.hard_boundaries_geometry[key][0].reshape(1,2)
-                    r   = self.hard_boundaries_geometry[key][1]
+                    mid        = self.hard_boundaries_geometry[key][0]
+                    r          = self.hard_boundaries_geometry[key][1]
+                    r_sq       = self.hard_boundaries_geometry[key][2]
+                    prev_index = self.hard_boundaries_geometry[key][3]
+                    diff_coeff = self.hard_boundaries_geometry[key][4]
+                    #--------------------------------------------------------------------------------
+                    org_index  = utils.check_circ_cond(pos = self.w_universe , mid = mid, r = r_sq, pbc_dim = self.pbc_dim)
                     
-                    index        = utils.check_circ_cond(pos = self.w_universe     , mid = mid, r = r, pbc_dim = self.pbc_dim)
-                    prev_index   = utils.check_circ_cond(pos = self.w_universe_prev, mid = mid, r = r, pbc_dim = self.pbc_dim)
+                    #This is a correct, but slow, way to get the indices of particles that were in the domain in the previous frame
+                    #prev_index = utils.check_circ_cond(pos = self.w_universe_prev, mid = mid, r = r_sq, pbc_dim = self.pbc_dim)
                     
                     #--------------------------------------------------------------------------------
                     #Perform Metropolis step if required
-                    if any(self.metropolis): index = self.double_metropolis_scheme( index = index, prev_index = prev_index)
-
+                    if any(self.metropolis): index = self.double_metropolis_scheme( index = org_index, prev_index = prev_index)
+                    
                     #--------------------------------------------------------------------------------
                     #Check if particles are reflected
-                    if not index.size > 0: continue
+                    if not index.size > 0:
+                        #If no particles are reflected, the indices of the particles in the domains are passed on 
+                        self.hard_boundaries_geometry[key][3] = org_index
+                        continue
                     
                     #--------------------------------------------------------------------------------
                     #Calculate reflection
                     #These are the indices of the particles that are reflected on the inside of the domain
                     index_in_domains = index[ self.in_domains[index] ]
-
+                    
+                    self.hard_boundaries_geometry[key][3] = np.append(org_index[ self.in_domains[org_index] ], index_in_domains)
+                    
                     #Calculate normals and intersection with the circular boundary
                     norm, intersection = reflection.get_normals_circle(points      = self.w_universe[index],
-                                                                 prev_points = self.w_universe_prev[index],
-                                                                 d           = self.displace[index],
-                                                                 mid         = mid,
-                                                                 r           = r,
-                                                                 pbc_dim     = self.pbc_dim
-                                                                 )
+                                                                       prev_points = self.w_universe_prev[index],
+                                                                       d           = self.displace[index],
+                                                                       mid         = mid,
+                                                                       r           = r,
+                                                                       pbc_dim     = self.pbc_dim)
                     
                     new_pos, d_new = reflection.calc_reflection(intersection = intersection, p_in = self.w_universe[index], n = norm, pbc_dim = self.pbc_dim )
-                    
-                    if not np.all( index_in_domains == index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r, pbc_dim = self.pbc_dim) ] ):
+
+                    if not np.all( index_in_domains == index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ] ):
                         print('Error points are not in circle, but are expected to be in circle!')
 
                         print(index)
-                        print(index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r, pbc_dim = self.pbc_dim) ])
+                        print(index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ])
 
                         np.save(file = self.output + "_debug_p.npy"           , arr = new_pos)
                         np.save(file = self.output + "_debug_p_older.npy"     , arr = self.w_universe_prev[index])
@@ -747,16 +545,22 @@ class Universe(base):
                     #Update positions
                     self.w_universe[index] = new_pos
                     
+                    #Update diffusion coefficients
+                    self.d_coeffs[ self.hard_boundaries_geometry[key][3] ] = diff_coeff
+
                 #TODO: Check polygon reflection
                 #Square hard boundary
                 elif 'p' in key:
                     
+                    raise ValueError("Currently not properly tested!")
+                    
                     #Calculate real distances
                     #--------------------------------------------------------------------------------
-                    edges = self.hard_boundaries_geometry[key][0:4]
-                    Lx    = self.hard_boundaries_geometry[key][4]
-                    Ly    = self.hard_boundaries_geometry[key][5] 
-                    mid   = self.hard_boundaries_geometry[key][6].reshape(1, 2)
+                    edges      = self.hard_boundaries_geometry[key][0:4]
+                    Lx         = self.hard_boundaries_geometry[key][4]
+                    Ly         = self.hard_boundaries_geometry[key][5] 
+                    mid        = self.hard_boundaries_geometry[key][6].reshape(1, 2)
+                    diff_coeff = self.hard_boundaries_geometry[key][7]
                     #--------------------------------------------------------------------------------
                     
                     condition = True
@@ -785,11 +589,18 @@ class Universe(base):
                         self.w_universe_prev[index] = intersection
                         self.displace[index]        = d_new
                         self.w_universe[index]      = new_pos
-                        
+                    
                         counter += 1
                         
                         assert counter < 2, 'Weird'
+
+                    index = utils.check_square_cond(pos = self.w_universe,
+                                                     Lx = Lx,
+                                                     Ly = Ly,
+                                                    mid = mid)
                         
+                    #Update diffusion coefficients
+                    self.d_coeffs[ index ] = diff_coeff
                 
                 else:
                     raise ValueError("Currently I cannot handle the provided geometry.")
@@ -1059,7 +870,7 @@ class Universe(base):
         return tau, msd, sd_per_particle
 
     @staticmethod
-    @jit(nopython=True, parallel=True)
+    @jit(nopython=True, fastmath=True)
     def evaluate_lagtimes(pos, lagtimes, N):
         
         #Storage arrays
@@ -1181,6 +992,7 @@ class Universe(base):
         dr = self.u_storage[:-lag, :, :] - self.u_storage[lag:, :, :]
         sqdist = np.square(dr).sum(axis=-1)
 
+        #sd_per_particle = sqdist.flatten() #sqdist.mean(axis = 0)
         sd_per_particle = sqdist.mean(axis = 0)
 
         print(f'Analysis from {begin * self.dt * self.nstxout / 1000 / 1000} to {stop * self.dt * self.nstxout / 1000 / 1000}')
@@ -1189,11 +1001,20 @@ class Universe(base):
         return sd_per_particle
     
     @staticmethod
-    def mean_square_displacement_fit(tau, msd, dim = 2):
-        
+    def mean_square_displacement_fit(tau, msd, dim = 2, begin = 0, stop = None):
+
+        if stop == None: stop = tau[-1]
+
+        mask = np.logical_and( begin <= tau, tau <= stop)
+
+        assert np.all( ~mask ) == False, 'Required range is not found in tau'
+
+        fit_tau = tau[mask]
+        fit_msd = msd[mask]
+
         #tau -> ns
         #msd -> nm2
-        DiffCoeff, Intercept = np.polyfit(x = tau, y = msd, deg = 1)
+        DiffCoeff, Intercept = np.polyfit(x = fit_tau, y = fit_msd, deg = 1)
 
         DiffCoeff /= (2 * dim)
 
@@ -1203,7 +1024,7 @@ class Universe(base):
         return DiffCoeff, Intercept
 
     @staticmethod
-    def plot_log_histogram_mean_square_displacement_distr(sd_per_particle, label, lo_limit = 1E-4, up_limit = 1.0, nbins = 51, color = 'red'):
+    def plot_log_histogram_mean_square_displacement_distr(ax, sd_per_particle, label, lo_limit = 1E-4, up_limit = 1.0, nbins = 51, color = 'red'):
 
         """
         Plot histogram with log-space bins
@@ -1226,20 +1047,22 @@ class Universe(base):
             
         """
 
-        a = plt.hist(sd_per_particle, 
-                     density=True, 
-                     bins = np.logspace(np.log10(lo_limit),np.log10(up_limit), nbins),
-                     histtype = 'step',
-                     color = color,
-                     label = label
-                    )
+        ax.hist(sd_per_particle, 
+                density=True, 
+                bins = np.logspace(np.log10(lo_limit),np.log10(up_limit), nbins),
+                histtype = 'stepfilled',
+                alpha = 0.3,
+                edgecolor = color,
+                color = color,
+                label = label
+                )
 
         #Scale
-        plt.xscale('log')
+        ax.set_xscale('log')
 
         #Label
-        plt.ylabel('Number of Trajectories')
-        plt.xlabel(r'MSD / $\mu$m$^2$')
+        #plt.ylabel('Number of Trajectories')
+        #plt.xlabel(r'MSD / $\mu$m$^2$')
 
         
 

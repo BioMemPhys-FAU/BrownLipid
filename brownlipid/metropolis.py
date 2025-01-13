@@ -15,6 +15,11 @@ def metropolis_decision(deltaE, RT):
         if alpha < p_accept: return True
         else: return False
 
+@jit(nopython=True, fastmath = True)
+def fast_metropolis_decision(deltaE):
+    alpha = np.random.rand()  # Avoid creating a 1-element array
+    return alpha < deltaE  # Simplify the return statement
+
 @jit(nopython=True)
 def get_delta_E(x_new, x_old, f_true, N, forceconstant):
 
