@@ -136,7 +136,32 @@ def check_circ_cond(pos, mid, r, pbc_dim):
 
     circ_dist = np.sum(circ_coor**2, axis = 1)
 
-    return np.where(circ_dist < r)[0]
+    return np.where(circ_dist <= r)[0]
+
+@jit(nopython=True)
+def check_not_circ_cond(pos, mid, r, pbc_dim):
+
+    """
+    Check if a particle is within a circle.
+
+    Parameters
+    ----------
+    
+
+    """
+
+    assert mid.ndim == 2, 'Middle point is not two-dimensional'
+
+    circ_coor = pos - mid
+    #Apply periodic boundary conditions
+    for j, size in zip(pbc_dim[0], pbc_dim[1]):
+        circ_coor[:, j] = np.where(circ_coor[:, j] >    size / 2, circ_coor[:, j] - size, circ_coor[:, j])
+        circ_coor[:, j] = np.where(circ_coor[:, j] <= - size / 2, circ_coor[:, j] + size, circ_coor[:, j])
+
+
+    circ_dist = np.sum(circ_coor**2, axis = 1)
+
+    return np.where(circ_dist > r)[0]
     
 
 @jit(nopython=True)

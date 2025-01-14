@@ -93,11 +93,11 @@ class Universe(base):
             #Apply hard wall boundary conditions
             self.w_universe = self.apply_hard_wall(pos = self.w_universe)
             
-            #Apply hard boundaries
-            self.hard_boundaries()
-            
             #Apply periodic boundary conditions
             self.w_universe = self.apply_pbc(pos = self.w_universe)
+            
+            #Apply hard boundaries
+            self.hard_boundaries()
             
             #-----------------------------------------------------------------------------------------------------------------
             #Store particle positions
@@ -393,8 +393,8 @@ class Universe(base):
         leaving_index  = not_index[ B ] #Case B.1
 
         #Some tests
-        #assert np.all( B ) == True, 'That should not happen with circles! - 1'
-        #assert np.all( leaving_index == not_index), 'That should not happen with circles! - 2'
+        assert np.all( B ) == True, 'That should not happen with circles! - 1'
+        assert np.all( leaving_index == not_index), 'That should not happen with circles! - 2'
         
         #Init empty list to collect indices of particles with rejected Metropolis Step
         index_after_metropolis = []
@@ -460,7 +460,7 @@ class Universe(base):
             else: raise ValueError('Could not handle request!')
             
     
-        return np.array(index_after_metropolis)
+        return np.array(index_after_metropolis), index[ A ]
 
     #-----------------------------------------------------------------------------------------------------------------------------
     #Boundaries
@@ -500,11 +500,15 @@ class Universe(base):
                     org_index  = utils.check_circ_cond(pos = self.w_universe , mid = mid, r = r_sq, pbc_dim = self.pbc_dim)
                     
                     #This is a correct, but slow, way to get the indices of particles that were in the domain in the previous frame
-                    #prev_index = utils.check_circ_cond(pos = self.w_universe_prev, mid = mid, r = r_sq, pbc_dim = self.pbc_dim)
+                    #prev_index_old = utils.check_circ_cond(pos = self.w_universe_prev, mid = mid, r = r_sq, pbc_dim = self.pbc_dim)
+
+                    #assert list(prev_index) == list(prev_index_old), f'Problem with new list {prev_index} and old list {prev_index_old}'
                     
                     #--------------------------------------------------------------------------------
                     #Perform Metropolis step if required
-                    if any(self.metropolis): index = self.double_metropolis_scheme( index = org_index, prev_index = prev_index)
+                    if any(self.metropolis): index, fix_inside_index = self.double_metropolis_scheme( index = org_index, prev_index = prev_index)
+
+                    #index is a list of particle indices that are reflected by the boundary 
                     
                     #--------------------------------------------------------------------------------
                     #Check if particles are reflected
@@ -512,29 +516,75 @@ class Universe(base):
                         #If no particles are reflected, the indices of the particles in the domains are passed on 
                         self.hard_boundaries_geometry[key][3] = org_index
                         continue
-                    
-                    #--------------------------------------------------------------------------------
-                    #Calculate reflection
-                    #These are the indices of the particles that are reflected on the inside of the domain
-                    index_in_domains = index[ self.in_domains[index] ]
-                    
-                    self.hard_boundaries_geometry[key][3] = np.append(org_index[ self.in_domains[org_index] ], index_in_domains)
-                    
-                    #Calculate normals and intersection with the circular boundary
-                    norm, intersection = reflection.get_normals_circle(points      = self.w_universe[index],
-                                                                       prev_points = self.w_universe_prev[index],
-                                                                       d           = self.displace[index],
-                                                                       mid         = mid,
-                                                                       r           = r,
-                                                                       pbc_dim     = self.pbc_dim)
-                    
-                    new_pos, d_new = reflection.calc_reflection(intersection = intersection, p_in = self.w_universe[index], n = norm, pbc_dim = self.pbc_dim )
 
-                    if not np.all( index_in_domains == index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ] ):
+                    #--------------------------------------------------------------------------------
+                    #Get indices of reflected particles that remain...
+                    index_in_domains  = index[  self.in_domains[index] ] #...inside domains
+                    index_out_domains = index[ ~self.in_domains[index] ] #...outside domains
+
+                    #--------------------------------------------------------------------------------
+                    #Get coordinates of reflected particles
+                    pos_index         = self.w_universe[index]
+                    prev_pos_index    = self.w_universe_prev[index]
+                    displace_index    = self.displace[index]
+                
+                    #--------------------------------------------------------------------------------
+                    #Calculate normals and intersection with the circular boundary
+                    norm, intersection    = reflection.get_normals_circle(points      = pos_index,
+                                                                          prev_points = prev_pos_index,
+                                                                          d           = displace_index,
+                                                                          mid         = mid,
+                                                                          r           = r,
+                                                                          pbc_dim     = self.pbc_dim)
+                    
+                    #Calculate new position after reflection
+                    new_pos, new_displace = reflection.calc_reflection(intersection = intersection, p_in = pos_index, n = norm, pbc_dim = self.pbc_dim )
+
+                    #--------------------------------------------------------------------------------
+                    #Update coordinates
+                    self.w_universe[index]      = new_pos
+
+                    #--------------------------------------------------------------------------------
+                    #There are rare (!) cases in which the particle is placed inside/outside the domain after the reflection
+                    #The following lines handle with such edge cases
+
+                    #Identify misplaced particles
+                    real_index_in_domains  = index[     utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ]
+                    real_index_out_domains = np.setdiff1d( ar1 = index, ar2 = real_index_in_domains, assume_unique = True)
+
+                    #Ideally escaped and captured would be empty
+                    escaped  = np.setdiff1d(ar1 = index_in_domains,  ar2 = real_index_in_domains, assume_unique = True)
+                    captured = np.setdiff1d(ar1 = index_out_domains, ar2 = real_index_out_domains, assume_unique = True)
+
+                    #The misplaced particles are just re-assigned 
+                    self.in_domains[ escaped  ] = False
+                    self.in_domains[ captured ] = True
+                    
+                    not_reflected_index = np.setdiff1d( ar1 = org_index, ar2 = index, assume_unique =True)
+                    self.hard_boundaries_geometry[key][3] =  np.union1d(ar1 = not_reflected_index, ar2 = real_index_in_domains)
+
+                        
+                    """
+                    try:
+                        assert np.all( index_in_domains == index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = (r + 1E-3 )**2, pbc_dim = self.pbc_dim) ] )
+                    except:
+
                         print('Error points are not in circle, but are expected to be in circle!')
 
-                        print(index)
-                        print(index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ])
+                        with open("debug_file.txt", "w") as f:
+
+                            f.write("Indices of all reflected particles:\n")
+                            for idx in index: f.write(f"{idx}\n")
+                            f.write("\n")
+                            
+                            f.write("Index of particles that should remain in domain after reflection:")
+                            for idx in index_in_domains: f.write(f"{idx}\n")
+                            f.write("\n")
+                            
+                            f.write("Index of particles that are in domain after reflection:")
+                            real_in_domains = index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ]
+                            for idx in real_in_domains: f.write(f"{idx}\n")
+                            f.write("\n")
 
                         np.save(file = self.output + "_debug_p.npy"           , arr = new_pos)
                         np.save(file = self.output + "_debug_p_older.npy"     , arr = self.w_universe_prev[index])
@@ -544,7 +594,7 @@ class Universe(base):
                     
                     #Update positions
                     self.w_universe[index] = new_pos
-                    
+                    """
                     #Update diffusion coefficients
                     self.d_coeffs[ self.hard_boundaries_geometry[key][3] ] = diff_coeff
 

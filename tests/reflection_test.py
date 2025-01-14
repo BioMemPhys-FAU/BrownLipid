@@ -372,3 +372,96 @@ def test_heavy_calc_reflection_in(m):
 
     np.testing.assert_allclose(dot_pp, dot_pr)
 
+
+#---------------------------------------------------------------------
+#Test 1
+intersection= np.load("../data/tests/test_full_reflection/trajectory_debug_intersection_test1.npy")
+prev_points = np.load("../data/tests/test_full_reflection/trajectory_debug_p_older_test1.npy")
+points      = np.load("../data/tests/test_full_reflection/trajectory_debug_p_old_test1.npy")
+refl        = np.load("../data/tests/test_full_reflection/trajectory_debug_p_test1.npy")
+
+L           = 10
+mid         = np.array([[L/2, L/2]])
+r           = np.sqrt( (L**2 * 0.3)/2 / np.pi )
+pbc_dim     = ([0, 1], [L, L])
+
+prev_index  = np.array([0, 1])
+index       = np.array([0, 1])
+in_domains  = np.array([True, True])
+true_in_domains  = np.array([False, True])
+
+test1 = (mid, r, prev_index, points, prev_points, index, in_domains, pbc_dim, true_in_domains)
+
+@pytest.mark.parametrize("mid, r, prev_index, points, prev_points, index, in_domains, pbc_dim, true_in_domains", [test1])
+def test_reflection_workflow(mid, r, prev_index, points, prev_points, index, in_domains, pbc_dim, true_in_domains):
+
+    r_sq = r ** 2
+
+    displace = points - prev_points
+
+    #--------------------------------------------------------------------------------
+    org_index  = utils.check_circ_cond(pos = points, mid = mid, r = r_sq, pbc_dim = pbc_dim)
+
+    #This is a correct, but slow, way to get the indices of particles that were in the domain in the previous frame
+    prev_index_old = utils.check_circ_cond(pos = prev_points, mid = mid, r = r_sq, pbc_dim = pbc_dim)
+
+    assert list(prev_index) == list(prev_index_old), f'Problem with new list {prev_index} and old list {prev_index_old}'
+
+    #index is a list of particle indices that are reflected by the boundary
+
+    #--------------------------------------------------------------------------------
+    #Check if particles are reflected
+    if not index.size > 0:
+        #If no particles are reflected, the indices of the particles in the domains are passed on
+        prev_index = org_index
+        np.testing.allclose(in_domains, true_in_domains)
+        return 0
+
+    #--------------------------------------------------------------------------------
+    #Get indices of reflected particles that remain...
+    index_in_domains  = index[  in_domains[index] ] #...inside domains
+    index_out_domains = index[ ~in_domains[index] ] #...outside domains
+
+    #--------------------------------------------------------------------------------
+    #Get coordinates of reflected particles
+    pos_index         = points[index]
+    prev_pos_index    = prev_points[index]
+    displace_index    = displace[index]
+
+    #--------------------------------------------------------------------------------
+    #Calculate normals and intersection with the circular boundary
+    norm, intersection    = reflection.get_normals_circle(points      = pos_index,
+                                                          prev_points = prev_pos_index,
+                                                          d           = displace_index,
+                                                          mid         = mid,
+                                                          r           = r,
+                                                          pbc_dim     = pbc_dim)
+
+    #Calculate new position after reflection
+    new_pos, new_displace = reflection.calc_reflection(intersection = intersection, p_in = pos_index, n = norm, pbc_dim = pbc_dim )
+
+    #--------------------------------------------------------------------------------
+    #Update coordinates
+    points[index]      = new_pos
+
+    #--------------------------------------------------------------------------------
+    #There are rare (!) cases in which the particle is placed inside/outside the domain after the reflection
+    #The following lines handle with such edge cases
+
+    #Identify misplaced particles
+    real_index_in_domains  = index[     utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = pbc_dim) ]
+    real_index_out_domains = np.setdiff1d( ar1 = index, ar2 = real_index_in_domains, assume_unique = True)
+
+    #Ideally escaped and captured would be empty
+    escaped  = np.setdiff1d(ar1 = index_in_domains,  ar2 =  real_index_in_domains, assume_unique = True)
+    captured = np.setdiff1d(ar1 = index_out_domains, ar2 = real_index_out_domains, assume_unique = True)
+    
+
+    #The misplaced particles are just re-assigned
+    in_domains[ escaped  ] = False
+    in_domains[ captured ] = True
+
+    not_reflected_index = np.setdiff1d( ar1 = org_index, ar2 = index, assume_unique =True)
+    prev_index =  np.union1d(ar1 = not_reflected_index, ar2 = real_index_in_domains)
+
+    np.testing.assert_equal(in_domains, true_in_domains)
