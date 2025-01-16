@@ -93,12 +93,12 @@ class Universe(base):
             #Apply hard wall boundary conditions
             self.w_universe = self.apply_hard_wall(pos = self.w_universe)
             
-            #Apply periodic boundary conditions
-            self.w_universe = self.apply_pbc(pos = self.w_universe)
-            
             #Apply hard boundaries
             self.hard_boundaries()
             
+            #Apply periodic boundary conditions
+            self.w_universe = self.apply_pbc(pos = self.w_universe)
+
             #-----------------------------------------------------------------------------------------------------------------
             #Store particle positions
 
@@ -530,7 +530,7 @@ class Universe(base):
                 
                     #--------------------------------------------------------------------------------
                     #Calculate normals and intersection with the circular boundary
-                    norm, intersection    = reflection.get_normals_circle(points      = pos_index,
+                    norm, intersection     = reflection.get_normals_circle(points     = pos_index,
                                                                           prev_points = prev_pos_index,
                                                                           d           = displace_index,
                                                                           mid         = mid,
@@ -538,11 +538,10 @@ class Universe(base):
                                                                           pbc_dim     = self.pbc_dim)
                     
                     #Calculate new position after reflection
-                    new_pos, new_displace = reflection.calc_reflection(intersection = intersection, p_in = pos_index, n = norm, pbc_dim = self.pbc_dim )
+                    new_pos, new_displace  = reflection.calc_reflection(intersection = intersection, p_in = pos_index, n = norm, pbc_dim = self.pbc_dim )
 
-                    #--------------------------------------------------------------------------------
                     #Update coordinates
-                    self.w_universe[index]      = new_pos
+                    self.w_universe[index] = new_pos
 
                     #--------------------------------------------------------------------------------
                     #There are rare (!) cases in which the particle is placed inside/outside the domain after the reflection
@@ -550,18 +549,25 @@ class Universe(base):
 
                     #Identify misplaced particles
                     real_index_in_domains  = index[     utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ]
-                    real_index_out_domains = np.setdiff1d( ar1 = index, ar2 = real_index_in_domains, assume_unique = True)
+                    real_index_out_domains = utils.get_elements_only_in_a(a = index, b = real_index_in_domains, assume_unique = True)
+                    #real_index_out_domains = np.setdiff1d( ar1 = index, ar2 = real_index_in_domains, assume_unique = True)
 
                     #Ideally escaped and captured would be empty
-                    escaped  = np.setdiff1d(ar1 = index_in_domains,  ar2 = real_index_in_domains, assume_unique = True)
-                    captured = np.setdiff1d(ar1 = index_out_domains, ar2 = real_index_out_domains, assume_unique = True)
+                    escaped  = utils.get_elements_only_in_a( a= index_in_domains, b = real_index_in_domains, assume_unique = True)
+                    captured = utils.get_elements_only_in_a( a= index_out_domains, b = real_index_out_domains, assume_unique = True)
+                    #escaped  = np.setdiff1d(ar1 = index_in_domains,  ar2 = real_index_in_domains, assume_unique = True)
+                    #captured = np.setdiff1d(ar1 = index_out_domains, ar2 = real_index_out_domains, assume_unique = True)
 
                     #The misplaced particles are just re-assigned 
                     self.in_domains[ escaped  ] = False
                     self.in_domains[ captured ] = True
-                    
-                    not_reflected_index = np.setdiff1d( ar1 = org_index, ar2 = index, assume_unique =True)
+
+                    not_reflected_index = utils.get_elements_only_in_a( a= org_index, b = index, assume_unique = True)
+                    #not_reflected_index = np.setdiff1d( ar1 = org_index, ar2 = index, assume_unique =True)
                     self.hard_boundaries_geometry[key][3] =  np.union1d(ar1 = not_reflected_index, ar2 = real_index_in_domains)
+                    
+                    #Update diffusion coefficients
+                    self.d_coeffs[ self.hard_boundaries_geometry[key][3] ] = diff_coeff
 
                         
                     """
@@ -595,8 +601,6 @@ class Universe(base):
                     #Update positions
                     self.w_universe[index] = new_pos
                     """
-                    #Update diffusion coefficients
-                    self.d_coeffs[ self.hard_boundaries_geometry[key][3] ] = diff_coeff
 
                 #TODO: Check polygon reflection
                 #Square hard boundary
@@ -859,7 +863,7 @@ class Universe(base):
         return 1
 
 
-    def mean_square_displacement(self, skip, begin = 0, stop = None):
+    def mean_square_displacement(self, skip, begin = 0, stop = None, max_lag = "max"):
 
         """
         Mean Square Displacement
@@ -885,9 +889,17 @@ class Universe(base):
         #Convert time to frames
         begin = int( np.round( begin / self.dt / self.nstxout ) )
         stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-        skip  = int( np.round( skip  / self.dt ) )
+        skip  = int( np.round( skip  / self.dt / self.nstxout) )
 
-        #assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
+        #Lag times at which MSD is evaluated
+        if max_lag == "max": lagtimes = np.arange(0, nsteps_analysis, skip)
+        else:
+
+            max_lag = int( np.round( max_lag / self.dt / self.nstxout ) )
+
+            assert (max_lag % skip) == 0, "Skip must be a multiple of max_lag"
+
+            lagtimes = np.arange(0, max_lag, skip)
         
         #Number of steps for analysis
         nsteps_analysis = stop - begin
@@ -896,20 +908,21 @@ class Universe(base):
         print(f"Start: Frame {begin}")
         print(f"Stop : Frame {stop}")
         print(f"Skip : Frame {skip}")
-        print(f"Frames: {nsteps_analysis}")
+        print(f"Frames: {lagtimes[-1]}")
+        print(f"Number of lags: {len(lagtimes)}")
         print("")
 
 
         #Load data
         self.load_data_unwrap()
 
-        #Lag times at which MSD is evaluated
-        lagtimes = np.arange(0, nsteps_analysis, skip)
-
         u_storage_analysis = np.copy( self.u_storage[begin:stop, :, :] )
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
+        self.evaluate_lagtimes(pos = np.random.rand(10, 10, 2), lagtimes = np.arange(0, 3, 1), N = 10)
+
+        print("Start analysis...")
         msd, sd_per_particle = self.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = self.N)
         
 
@@ -941,7 +954,7 @@ class Universe(base):
         
         return msd, sd_per_particle
     
-    def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None):
+    def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max"):
 
         """
         Mean Square Displacement in one dimension
@@ -980,6 +993,14 @@ class Universe(base):
         #Number of steps for analysis
         nsteps_analysis = stop - begin
 
+        #Lag times at which MSD is evaluated
+        if max_lag == "max": lagtimes = np.arange(0, nsteps_analysis, skip)
+        else:
+
+            max_lag = int( np.round( begin / self.dt ) )
+
+            lagtimes = np.arange(0, max_lag, skip)
+
         print(f"Calculating MSD...")
         print(f"Start: Frame {begin}")
         print(f"Stop : Frame {stop}")
@@ -990,9 +1011,6 @@ class Universe(base):
 
         #Load data
         self.load_data_unwrap()
-
-        #Lag times at which MSD is evaluated
-        lagtimes = np.arange(0, nsteps_analysis, skip)
 
         #Storage arrays
         msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)

@@ -81,7 +81,7 @@ def get_normals_circle(prev_points, points, d, mid, r, pbc_dim):
     intersection = prev_points + lam * d
     
     #Apply periodic boundary conditions
-    for j, size in zip(pbc_dim[0], pbc_dim[1]): intersection[:, j] %= size
+    #for j, size in zip(pbc_dim[0], pbc_dim[1]): intersection[:, j] %= size
 
     #-------------------------------------
     #Calculate normal vector
@@ -125,6 +125,6 @@ def calc_reflection(intersection, p_in, n, pbc_dim):
     reflection = intersection + reflection_vector
 
     #Apply periodic boundary conditions
-    for j, size in zip(pbc_dim[0], pbc_dim[1]): reflection[:, j] %= size
+    #for j, size in zip(pbc_dim[0], pbc_dim[1]): reflection[:, j] %= size
     
     return reflection, reflection_vector

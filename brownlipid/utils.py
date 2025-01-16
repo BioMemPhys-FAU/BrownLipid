@@ -218,3 +218,24 @@ def test_intersection(intersection, curr_points, prev_points, displace, pbc_dim)
     check = curr_inter2 + prev_inter2 + 2 * np.sqrt(curr_inter2 * prev_inter2)
 
     return check, d2
+
+def get_elements_only_in_a(a, b, assume_unique):
+
+    """
+    Obtain set difference between a and b.
+
+    a := numpy.ndarray
+        array to test against
+    b := numpy.ndarray
+        array containing elements that are tested
+    assume_unique := boolean
+
+    """
+
+    #mask has the shape of a
+    mask = ~np.isin( element = a, test_elements = b, assume_unique = assume_unique )
+    #   -> False: Element is in b and a
+    #   -> True:  Element is not in b, but only in a
+
+    #Return only the elements
+    return a[ mask ]

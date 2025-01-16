@@ -59,14 +59,6 @@ def test_get_normals_circle(prev_points, points, d, mid, r, pbc_dim, inter_true,
                                                        r           = r,
                                                        pbc_dim     = pbc_dim)
 
-    for k, size in zip(pbc_dim[0], pbc_dim[1]): 
-        intersection[:, k] %= size
-
-    norm = utils.apply_pbc_vector( vec = norm, pbc_dim = pbc_dim)
-
-    np.testing.assert_allclose(intersection, inter_true)
-    np.testing.assert_allclose(norm, norm_true)
-    
     #-------------------------------------
     #Check if intersection is between old positions and new positions
     #The following code checks if the intersection is located on the shortest vector between the previous and the
@@ -81,6 +73,11 @@ def test_get_normals_circle(prev_points, points, d, mid, r, pbc_dim, inter_true,
     test_result = np.allclose(check, d2) & np.allclose(d2, check)
 
     np.testing.assert_equal(test_result, True)
+    
+    for i, size in zip(pbc_dim[0], pbc_dim[1]): intersection[:, i] %= size
+
+    np.testing.assert_allclose(intersection, inter_true)
+    np.testing.assert_allclose(norm, norm_true)
 
 
 
@@ -173,7 +170,6 @@ def test_simple_calc_reflection(intersection, p_in, n, pbc_dim, ref_true, ref_ve
                                                  pbc_dim      = pbc_dim)
     
     np.testing.assert_allclose(ref_vector, ref_vector_true)
-    np.testing.assert_allclose(ref, ref_true)
 
     #----------------------------------------------------
     #Test reflection
@@ -188,6 +184,9 @@ def test_simple_calc_reflection(intersection, p_in, n, pbc_dim, ref_true, ref_ve
     dot_pr /= np.linalg.norm(pos_ref   , axis = 1)
 
     np.testing.assert_allclose(dot_pp, dot_pr)
+    
+    for i, size in zip(pbc_dim[0], pbc_dim[1]): ref[:, i] %= size
+    np.testing.assert_allclose(ref, ref_true)
 
 #@pytest.mark.parametrize("m", [ (np.array([50, 50])), (np.array([65.23, 40.231])), (np.array([12.343, 78.4321])),
 #                                (np.array([0, 0])), (np.array([0, 100])), (np.array([100, 0])), (np.array([100, 100])),
