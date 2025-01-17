@@ -905,7 +905,7 @@ class Universe(base):
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
-        lagtimes = np.arange(1, nsteps_analysis + 1, 1)
+        lagtimes = np.arange(0, nsteps_analysis, 1)
         
         print("Start analysis...")
         if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis)
