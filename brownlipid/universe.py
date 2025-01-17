@@ -863,7 +863,7 @@ class Universe(base):
         return 1
 
 
-    def mean_square_displacement(self, skip, begin = 0, stop = None, max_lag = "max"):
+    def mean_square_displacement(self, begin = 0, stop = None, fft=True):
 
         """
         Mean Square Displacement
@@ -889,17 +889,6 @@ class Universe(base):
         #Convert time to frames
         begin = int( np.round( begin / self.dt / self.nstxout ) )
         stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-        skip  = int( np.round( skip  / self.dt / self.nstxout) )
-
-        #Lag times at which MSD is evaluated
-        if max_lag == "max": lagtimes = np.arange(0, nsteps_analysis, skip)
-        else:
-
-            max_lag = int( np.round( max_lag / self.dt / self.nstxout ) )
-
-            assert (max_lag % skip) == 0, "Skip must be a multiple of max_lag"
-
-            lagtimes = np.arange(0, max_lag, skip)
         
         #Number of steps for analysis
         nsteps_analysis = stop - begin
@@ -907,11 +896,7 @@ class Universe(base):
         print(f"Calculating MSD...")
         print(f"Start: Frame {begin}")
         print(f"Stop : Frame {stop}")
-        print(f"Skip : Frame {skip}")
-        print(f"Frames: {lagtimes[-1]}")
-        print(f"Number of lags: {len(lagtimes)}")
         print("")
-
 
         #Load data
         self.load_data_unwrap()
@@ -920,40 +905,18 @@ class Universe(base):
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
-        self.evaluate_lagtimes(pos = np.random.rand(10, 10, 2), lagtimes = np.arange(0, 3, 1), N = 10)
-
-        print("Start analysis...")
-        msd, sd_per_particle = self.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = self.N)
+        lagtimes = np.arange(1, nsteps_analysis + 1, 1)
         
-
+        print("Start analysis...")
+        if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis)
+        else: utils.evaluate_lagtimes_fft(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
+        
         #Convert lagtimes array to physical time
-        tau = np.float32(lagtimes)
+        tau = lagtimes.astype( np.float32 )
         tau = tau * self.dt * self.nstxout
 
         return tau, msd, sd_per_particle
 
-    @staticmethod
-    @jit(nopython=True, fastmath=True)
-    def evaluate_lagtimes(pos, lagtimes, N):
-        
-        #Storage arrays
-        msd             = np.zeros(  lagtimes.shape[0],     dtype = np.float32)
-        sd_per_particle = np.zeros( (lagtimes.shape[0], N), dtype = np.float32)
-
-        #Evalulate lagtimes
-        for i, lag in enumerate(lagtimes):
-
-            if i == 0: continue
-
-            dr = pos[:-lag, :, :] - pos[lag:, :, :]
-
-            sqdist = np.square(dr).sum(axis=-1)
-
-            msd[i]             = sqdist.mean()
-            sd_per_particle[i] = np.sum(sqdist, axis = 0) / sqdist.shape[0]
-        
-        return msd, sd_per_particle
-    
     def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max"):
 
         """
@@ -1131,7 +1094,4 @@ class Universe(base):
         #Label
         #plt.ylabel('Number of Trajectories')
         #plt.xlabel(r'MSD / $\mu$m$^2$')
-
-        
-
-
+    

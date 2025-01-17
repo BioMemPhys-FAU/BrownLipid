@@ -4,6 +4,8 @@ from typing import Union, Dict, Any
 import numpy as np
 from tqdm import tqdm 
 
+from . import utils
+
 class base:
 
     def __init__(
@@ -18,6 +20,7 @@ class base:
                           nstchk:                      int = 1, 
                     base_d_coeff:                    float = 1.,
                  hard_boundaries:                     dict = {},
+                  random_domains:                     bool = False,
                       metropolis:                     dict = {},
                  external_forces:                     dict = {},
                             temp:                    float = 298,
@@ -109,6 +112,21 @@ class base:
                                                              ]
 
                         self.total_area_domains += np.pi * r**2
+
+                    if random_domains == True:
+
+                        print("Random placement of domains requested!")
+                        print("Attention! Previous coordinates will be overwritten!")
+
+                        ran_mid = utils.distribute_domains_random_same_radius(number  = len(geometries),
+                                                                              r       = r,
+                                                                              size_x  = size_x,
+                                                                              size_y  = size_y,
+                                                                              pbc_dim = self.pbc_dim, output = self.output)
+
+                        for i, ran_mid_i in enumerate(ran_mid): hard_boundaries_geometry[f"c{i}"][0] = ran_mid_i.reshape(1, 2)
+
+
 
                 elif key == 'Rectangle':
                     

@@ -183,3 +183,17 @@ def test_test_intersection(intersection, curr_points, prev_points, displace, pbc
 
     np.testing.assert_equal(test_result, result)
 
+@pytest.mark.parametrize("F, N", [(1000, 50), (343, 38), (95, 199)])
+def test_msd(F, N):
+
+    pos = np.random.rand(F, N, 2) * 100
+
+    lagtimes = np.arange(0, pos.shape[0], 1)
+
+    msd,     sd_per_particle     = utils.evaluate_lagtimes(pos = pos, lagtimes = lagtimes, N = pos.shape[1])
+    msd_fft, sd_per_particle_fft = utils.MSD_fft_ax(pos = pos)
+
+    msd_fft[0] = 0
+
+    np.testing.assert_allclose(msd, msd_fft)
+    np.testing.assert_allclose(sd_per_particle, sd_per_particle)

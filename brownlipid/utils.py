@@ -239,3 +239,136 @@ def get_elements_only_in_a(a, b, assume_unique):
 
     #Return only the elements
     return a[ mask ]
+
+#@jit(nopython=True, fastmath=True)
+def evaluate_lagtimes(pos, lagtimes, N):
+    
+    #Storage arrays
+    msd             = np.zeros(  lagtimes.shape[0],     dtype = np.float32)
+    sd_per_particle = np.zeros( (lagtimes.shape[0], N), dtype = np.float32)
+
+    #Evalulate lagtimes
+    for i, lag in enumerate(lagtimes):
+
+        if i == 0: continue
+        dr = pos[:-lag, :, :] - pos[lag:, :, :]
+
+        sqdist = np.square(dr).sum(axis=-1)
+
+        msd[i]             = sqdist.mean()
+        sd_per_particle[i] = np.sum(sqdist, axis = 0) / sqdist.shape[0]
+    
+    return msd, sd_per_particle
+
+
+def MSD_fft_ax(pos):
+
+    """
+    Mean Square Displacement Calculation using Fourier Transforms
+
+    The Mean Square Displacement Calculation can be significantly speed up using Fourier Transforms.
+    The MSD equation,
+
+    sum( ( r(k+m) - r(k) )^2 ) / (N - m)
+
+    can be re-written as
+
+    [ sum( r(k+m)^2 + r(k)^2 ) - 2 * sum( r(k) * r(k+m) ) ] / (N - m) = [ S1(m) - 2*S2(m) ] / (N - m)
+
+    The part S2(m) denotes an autocorrelation function that can be solved with Fourier Transforms, while S1(m) can be solved recursively.
+    
+
+    
+    Adapted from: https://stackoverflow.com/questions/69738376/how-to-optimize-mean-square-displacement-for-several-particles-in-two-dimensions/69767209#69767209
+
+    """
+
+    nTime=pos.shape[0]
+
+    axis_time  = 0
+    axis_coord = 2
+
+    #Calculate the Power Spectral Density of the function
+    FT  = np.fft.fft(pos, n=2*nTime, axis = axis_time)
+    PSD = FT * FT.conjugate()
+
+    #Autocorrelation -> Not normed yet
+    S2  = np.sum( np.fft.ifft( PSD, axis = axis_time ).take(range(nTime), axis = axis_time).real, axis = axis_coord )
+
+    #Calculate S1 via the Fast Correlation Algorithm
+    D=np.square(pos).sum(axis=axis_coord) #Equal to r_x(k)^2 + r_y(k)^2
+
+    shape_t     = (nTime, 1)
+    shape_non_t = (1, pos.shape[1] )
+
+    D=np.append(D, np.zeros( shape_non_t ), axis = axis_time) #[A, B, C, 0]
+
+    Q = 2 * np.sum(D, axis = axis_time).reshape(shape_non_t)
+
+    S1 = ( Q - 
+          np.cumsum( 
+                    np.insert( D[:-1, :], 0, 0, axis = axis_time) + 
+                    np.flip(   D,               axis = axis_time),  #[0, A, B, C] + [0, C, B, A]
+                    axis = axis_time )
+          )[:-1, :]
+
+    MSD = ( S1-2*S2 ) / ( nTime-np.arange(nTime).reshape(shape_t) )
+
+    Dt_r = np.arange(1, nTime - 1)
+
+    sd_per_particle = MSD.take(Dt_r, axis = axis_time)
+    msd             = MSD.mean(1) 
+    
+    return msd, sd_per_particle
+
+
+
+def distribute_domains_random_same_radius(number, r, size_x, size_y, pbc_dim, output):
+
+    attempts     = 0
+    max_attempts = 10000000
+
+    r_buffer = r + 0.75
+
+    number_placed = 0
+    while number_placed < number:
+
+        xy = np.random.rand(1, 2)
+
+        xy[:, 0] *= size_x
+        xy[:, 1] *= size_y
+
+        if number_placed == 0: 
+            placed_ = xy
+            number_placed += 1
+            continue
+
+        d = placed_ - xy
+        d = apply_pbc_vector(vec = d, pbc_dim = pbc_dim)
+
+        d = np.linalg.norm(d, axis = 1)
+
+        if np.all( d > r_buffer): 
+            placed_ = np.vstack((placed_, xy))
+            number_placed += 1
+
+        attempts += 1
+
+        if attempts == max_attempts: raise ValueError("Too many attempts to place domains")
+
+    with open(f"{output}_random_midpoints.txt", "w") as f:
+
+        f.write("Position of random domains\n")
+        for i, placed_i in enumerate(placed_): f.write(f"c{i};{placed_i[0]};{placed_i[1]}\n")
+
+    return placed_
+
+        
+        
+
+
+
+
+
+
+
