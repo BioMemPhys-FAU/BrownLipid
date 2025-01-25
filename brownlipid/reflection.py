@@ -98,7 +98,7 @@ def get_normals_circle(prev_points, points, d, mid, r, pbc_dim):
     return norm, intersection
 
 @jit(nopython=True)
-def calc_reflection(intersection, p_in, n, pbc_dim):
+def calc_reflection(intersection, p_in, n, pbc_dim, bounce_scale = 1.):
 
     """
     Calculate reflection vector of vector d with normal n
@@ -122,7 +122,7 @@ def calc_reflection(intersection, p_in, n, pbc_dim):
 
     reflection_vector = d_rest - 2 * np.sum(d_rest * n, axis = 1).reshape(-1, 1) * n
     
-    reflection = intersection + reflection_vector
+    reflection = intersection + bounce_scale * reflection_vector
 
     #Apply periodic boundary conditions
     #for j, size in zip(pbc_dim[0], pbc_dim[1]): reflection[:, j] %= size

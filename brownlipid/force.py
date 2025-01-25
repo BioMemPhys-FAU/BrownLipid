@@ -80,7 +80,71 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
 
     return force_per_particle
 
-def generate_pairlist(pos, N, pbc_dim, lj_buffer, lj_cutoff):
+@jit(nopython=True)
+def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
+
+    """
+    Core function for force calculation.
+
+    The function calculate the pair-wise additive forces between particles derived from a Lennard-Jones potential
+
+        V(r) = 4 * eps * ( (sig/r)^12 - (sig/r)^6 )         (1)
+
+    r is the distance between two particles; sig and eps are parameters of the Lennard-Jones potential pre-defined by the user.
+
+    Parameters
+    ----------
+
+    rij             := numpy.ndarray
+        Directional vectors from particle j to i.
+    rij_sq          := numpy.ndarray
+        Squared distances between particle j and i.
+    N               := int
+        Number of particles in the system.
+    lj_A12          := float
+        Lennard Jones parameter for the repulsive part. User-defined.
+    lj_B6           := float
+        Lennard Jones parameter for the attractive part. User-defined.
+    masked_pairlist := numpy.ndarray
+        Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
+
+
+    """
+    
+    #Calculate inverse of the squared distance
+    inv_rij_sq = 1.0 / rij_sq
+
+    #Calculate powers for the attractive and the repulsive part of the Lennard-Jones potential
+    sr6        = inv_rij_sq ** 3
+    sr12       = sr6 ** 2
+
+    #Calculate "scaling factor" for the force
+    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
+    
+    #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
+    force = force.reshape(-1, 1) * rij
+
+    #Storage factor for the force per particle
+    force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
+
+    #Iterate over all particle pairs in the pairlist with a pair distance below the VdW cutoff
+    k = 0
+    for pair in masked_pairlist:
+
+        #Extract pair
+        i, j = pair[0], pair[1]
+
+        force_k = np.array([ np.sum(Dij[i,j][0] * force[k]), np.sum(Dij[i,j][1] * force[k]) ], dtype = np.float32 )
+
+        #Apply Newton's third law: Actio est reactio 
+        force_per_particle[i] += force_k
+        force_per_particle[j] -= force_k #Equal force is acting on j, therefore subtraction
+
+        k += 1
+
+    return force_per_particle
+
+def generate_pairlist(dist_mat, vec_mat, N, lj_buffer):
 
     """
     Pair list generation. A pair list keeps track of neighboured particles to speed up the force calculation.
@@ -115,41 +179,35 @@ def generate_pairlist(pos, N, pbc_dim, lj_buffer, lj_cutoff):
     #------------------------------------------------
     #Setup pair list
 
-    #Calculate distances and distance vectors for all unique pairs of particles 
-    dist_mat, vec_mat = utils.distance_matrix_NxN(pos = pos, N = N, pbc_dim = pbc_dim)
-
     #Get indices of pair distances below outer cutoff radius
-    pairlist = np.where( dist_mat <= lj_buffer )
-    
-    #Convert it to two-dimensional array -> (K, 2) with K the number of particle pairs with distance below lj_buffer
-    pairlist = np.vstack( pairlist ).T
+    pairlist       = np.where(  dist_mat <= lj_buffer )
+    outer_pairlist = np.where( (dist_mat > lj_buffer) & (dist_mat < np.inf) )
 
-    #I don't think I need the two lines, because dist_mat includes only the upper triangle of the full distance matrix
-    #First column always smaller than second column
-    #pairlist = np.sort(pairlist, axis = 1)
-    #pairlist = np.unique(pairlist, axis = 0)
-    
-    #------------------------------------------------
-    #Buffer
+    #Convert it to two-dimensional array -> (K, 2) with K the number of particle pairs with distance below lj_buffer
+    pairlist       = np.vstack(       pairlist ).T
+    outer_pairlist = np.vstack( outer_pairlist ).T
 
     #Extract distance vector and squared distances based on the pair list
     rij    =  vec_mat[ pairlist[:, 0], pairlist[:, 1] ]
     rij_sq = dist_mat[ pairlist[:, 0], pairlist[:, 1] ]
+    
+    outer_rij    =  vec_mat[ outer_pairlist[:, 0], outer_pairlist[:, 1] ]
+    outer_rij_sq = dist_mat[ outer_pairlist[:, 0], outer_pairlist[:, 1] ]
 
-    assert np.all(np.isfinite(rij))   , 'Inf or nan in vector matrix!'
-    assert np.all(np.isfinite(rij_sq)), 'Inf or nan in distance matrix!'
+    return rij, rij_sq, pairlist, outer_rij, outer_rij_sq, outer_pairlist
+    
+@jit(nopython=True)
+def filter_pairlist(cutoff, rij, rij_sq):
 
-    #------------------------------------------------
-    #Apply inner cutoff
-    mask = (rij_sq <= lj_cutoff)
+    mask = (rij_sq <= cutoff)
 
-    rij    = rij[mask]
-    rij_sq = rij_sq[mask]
+    inner_rij   , outer_rij    = rij[mask],    rij[~mask]
+    inner_rij_sq, outer_rij_sq = rij_sq[mask], rij_sq[~mask]
 
-    return rij, rij_sq, mask, pairlist
+    return inner_rij, inner_rij_sq, mask, outer_rij, outer_rij_sq
 
 @jit(nopython=True)
-def update_pairlist(pos, pairlist, pbc_dim, lj_cutoff):
+def update_pairlist(pos, pairlist, pbc_dim):
 
     """
     This function is called if a pairlist was generated in a previous step.
@@ -175,6 +233,16 @@ def update_pairlist(pos, pairlist, pbc_dim, lj_cutoff):
         Boolean mask for pairlist. Maps to unique particle pairs with a distance below lj_cutoff.
 
     """
+
+    # Get the maximum valid index
+    max_index = pos.shape[0] - 1
+    
+    # Check each index in the pairlist
+    for idx in pairlist.flat:
+        if idx < 0 or idx > max_index:
+            # Raise an IndexError with a descriptive message
+            raise IndexError(f"Index {idx} is out of bounds for array with {pos.shape[0]} elements")
+    
     
     #Current distances between particle pairs in pairlist
     #Distance vector points from second column to first column -> j -> i, because first column denotes row of the NxN distance matrix
@@ -188,11 +256,4 @@ def update_pairlist(pos, pairlist, pbc_dim, lj_cutoff):
     #Calculate squared distances
     rij_sq = np.sum(rij**2, axis = 1)
     
-    #Create a boolean mask for particle pairs with distances below VdW cutoff
-    mask = (rij_sq <= lj_cutoff)
-    
-    #Apply boolean mask
-    rij    = rij[mask]
-    rij_sq = rij_sq[mask]
-
-    return rij, rij_sq, mask
+    return rij, rij_sq

@@ -21,8 +21,8 @@ N    = 2
 pos  = np.array([[1, 1], [3, 3]])
 dist = np.sum( (pos[0] - pos[1])**2 )
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([0,1], [L, L])
 
@@ -36,8 +36,8 @@ L    = 10.
 N    = 2
 pos  = np.array([[1, 5], [9, 5]])
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([0,1], [L, L])
 dist_mat[0, 1] = 2**2
@@ -50,8 +50,8 @@ L    = 10.
 N    = 2
 pos  = np.array([[1, 5], [9, 5]])
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([1], [L])
 dist_mat[0, 1] = 8**2
@@ -64,8 +64,8 @@ L    = 10.
 N    = 2
 pos  = np.array([[4, 1], [4, 9]])
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([0,1], [L, L])
 dist_mat[0, 1] = 2**2
@@ -78,8 +78,8 @@ L    = 10.
 N    = 2
 pos  = np.array([[4, 1], [4, 9]])
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([0], [L])
 dist_mat[0, 1] = 8**2
@@ -92,8 +92,8 @@ L    = 100000.
 N    = 1000
 pos  = 500 * np.random.rand(N, 2)
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([0, 1], [L, L])
 
@@ -110,8 +110,8 @@ L    = 500.
 N    = 1000
 pos  = 500 * np.random.rand(N, 2)
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N) )    * np.nan
+vec_mat  = np.ones( (N, N, 2) ) * np.nan
 
 pbc_dim = ([0, 1], [L, L])
 

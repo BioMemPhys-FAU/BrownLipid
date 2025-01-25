@@ -20,6 +20,10 @@ class base:
                           nstchk:                      int = 1, 
                     base_d_coeff:                    float = 1.,
                  hard_boundaries:                     dict = {},
+                    bounce_scale:       Union[None, float] = None,
+            checkpoint_structure:  Union[None, np.ndarray] = None,
+                   hydrodynamics:                     bool = False,
+                       viscosity:                    float = 1,
                   random_domains:                     bool = False,
                       metropolis:                     dict = {},
                  external_forces:                     dict = {},
@@ -29,20 +33,24 @@ class base:
                 ):
 
         
-        self.size_x       = size_x
-        self.size_y       = size_y
-        self.N            = N
-        self.nsteps       = nsteps
-        self.dt           = dt
-        self.nstxout      = nstxout
-        self.nstchk       = nstchk
-        self.base_d_coeff = base_d_coeff
-        self.output       = output
-        self.metropolis   = metropolis
-        self.external_forces = external_forces
-        self.temp         = temp
-        self.RT           = 8.3145 * 1E-3 * self.temp
-        self.d_coeffs     = np.repeat( self.base_d_coeff, self.N )
+        self.size_x               = size_x
+        self.size_y               = size_y
+        self.N                    = N
+        self.nsteps               = nsteps
+        self.dt                   = dt
+        self.nstxout              = nstxout
+        self.nstchk               = nstchk
+        self.checkpoint_structure = checkpoint_structure
+        self.base_d_coeff         = base_d_coeff
+        self.output               = output
+        self.metropolis           = metropolis
+        self.hydrodynamics        = hydrodynamics
+        self.bounce_scale         = bounce_scale
+        self.viscosity            = viscosity
+        self.external_forces      = external_forces
+        self.temp                 = temp
+        self.RT                   = 8.3145 * 1E-3 * self.temp
+        self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
 
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
@@ -100,6 +108,7 @@ class base:
                         r          = geometry[1]
                         diff_coeff = geometry[0]
                         prev_index = np.array([], dtype = np.int64) #Indices of particles inside circle in the previous frame
+                        pairlist   = np.array([], dtype = np.int64)
 
                         mid = np.array([mx,my]).reshape(1, 2)
 
@@ -109,6 +118,7 @@ class base:
                                                              r ** 2,
                                                              prev_index,
                                                              diff_coeff
+                                                             pairlist
                                                              ]
 
                         self.total_area_domains += np.pi * r**2
@@ -124,7 +134,10 @@ class base:
                                                                               size_y  = size_y,
                                                                               pbc_dim = self.pbc_dim, output = self.output)
 
-                        for i, ran_mid_i in enumerate(ran_mid): hard_boundaries_geometry[f"c{i}"][0] = ran_mid_i.reshape(1, 2)
+                        for i, ran_mid_i in enumerate(ran_mid): 
+                            hard_boundaries_geometry[f"c{i}"][0] = ran_mid_i.reshape(1, 2)
+                            hard_boundaries[key][i][2] = ran_mid_i[0]
+                            hard_boundaries[key][i][3] = ran_mid_i[1]
 
 
 
@@ -158,6 +171,7 @@ class base:
                         self.total_area_domains += Lx * Ly
 
             self.hard_boundaries_geometry = hard_boundaries_geometry
+            self.hard_boundaries_final    = hard_boundaries
 
         else: self.hard_boundaries_geometry = {}
         
@@ -207,6 +221,20 @@ class base:
             self.lj_cutoff  = external_forces['r_vdw']**2
             self.lj_buffer  = external_forces['r_list']**2
 
+        if self.hydrodynamics == True: 
+
+            self.cutoff_2a = ( 2**(1/6) * external_forces['sigma'] )**2
+            self.cutoff_a  =  2**(1/6) * external_forces['sigma'] / 2
+            
+            self.Dij = np.ones( (self.N, self.N, 2, 2), dtype = np.float32 ) * np.nan
+
+            self.viscosity_scale =(1.380649 * self.temp) / ( self.viscosity * np.pi )
+
+            print( self.viscosity_scale, (6 * self.cutoff_a), self.cutoff_a)
+
+            self.Dij[range(self.N), range(self.N)] = np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a)
+
+            print(np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a))
 
 
     #--------------------------------------------------------------------------------------------------------------------------------------------------------------

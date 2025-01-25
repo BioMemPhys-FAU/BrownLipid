@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 
 from numba import jit
 
-@staticmethod
 def heaviside(x, threshold):
 
     """
@@ -70,8 +69,12 @@ def distance_matrix_NxN(pos, N, pbc_dim):
     """
 
     #Init storage vectors
+    #dist_mat = np.zeros((N, N)   , dtype = np.float32) * np.nan
+    #vec_mat  = np.zeros((N, N, 2), dtype = np.float32) * np.nan
+    
     dist_mat = np.ones((N, N)   , dtype = np.float32) * np.inf
     vec_mat  = np.ones((N, N, 2), dtype = np.float32) * np.inf
+
 
     #Fill only upper triangle
     for i in range(N - 1):
@@ -112,6 +115,42 @@ def apply_pbc_vector(vec, pbc_dim) -> np.ndarray:
             vec[:, i] = np.where(vec[:, i] <= - size / 2, vec[:, i] + size, vec[:, i])
 
         return vec
+
+@jit(nopython=True)
+def apply_hard_wall_scale(pos, d, hard_wall, bounce_scale):
+
+    """
+    Periodic boundary conditions for POSITIONAL VECTORS a.k.a. POINTS.
+
+    Particles leaving the box on one site, enter the box again from the opposite site.
+    Since, a simple rectangular box shape is used as unit cell the modulo operator is applied here.
+
+    """
+
+    if len( hard_wall[0] ) == 0: return pos
+
+    assert pos.ndim == 2, 'Position vector has not a dimension of 2'
+
+    d_norm = bounce_scale * d / np.sqrt( np.sum( d**2, axis = 1) ).reshape(-1,1)
+
+
+    #Apply periodic boundary conditions for every requested dimension
+    for i, size in zip(hard_wall[0], hard_wall[1]):
+
+        changed = np.array([-1 * i + 1 * (1-i), 1 * i - 1 * (1-i)], dtype = np.float32)
+
+        mask0 = pos[:, i] < 0
+        maskL = pos[:, i] > size
+
+        lamd0 =        (pos[mask0, i]  / d[mask0, i]).reshape(-1,1) * d[mask0]
+        lamdL = ((-size+pos[maskL, i]) / d[maskL, i]).reshape(-1,1) * d[maskL]
+
+        pos[mask0] -= lamd0 + np.sqrt(np.sum( lamd0**2, axis = 1)).reshape(-1, 1) * (changed * d_norm[mask0])
+
+        pos[maskL] -= lamdL + np.sqrt(np.sum( lamdL**2, axis = 1)).reshape(-1, 1) * (changed * d_norm[maskL])
+
+
+    return pos
 
 @jit(nopython=True)
 def check_circ_cond(pos, mid, r, pbc_dim):
@@ -251,7 +290,7 @@ def evaluate_lagtimes(pos, lagtimes, N):
     for i, lag in enumerate(lagtimes):
 
         if i == 0: continue
-        dr = pos[:-lag, :, :] - pos[lag:, :, :]
+        dr = pos[:-lag] - pos[lag:]
 
         sqdist = np.square(dr).sum(axis=-1)
 
@@ -363,7 +402,71 @@ def distribute_domains_random_same_radius(number, r, size_x, size_y, pbc_dim, ou
 
     return placed_
 
-        
+def generate_grid(size_x, size_y, grid_spacing):
+    
+    x = np.linspace(0, size_x, int(np.round(size_x / grid_spacing) + 1))[:-1] + grid_spacing / 2
+    y = np.linspace(0, size_y, int(np.round(size_y / grid_spacing) + 1))[:-1] + grid_spacing / 2
+
+    nx = len(x)
+    ny = len(y)
+
+    xv, yv = np.meshgrid(x, y, indexing = "xy")
+
+    xi, yi = np.meshgrid(range(nx), range(ny), indexing = "xy")
+
+    grid     = np.column_stack((xv.ravel(), yv.ravel()))
+    idx_grid = np.column_stack((xi.ravel(), yi.ravel()))
+
+    full_grid= np.vstack((xv[np.newaxis, :, :], yv[np.newaxis, :, :])).T
+
+    return grid, idx_grid, full_grid, nx, ny
+
+@jit(nopython=True, fastmath = True)
+def calc_vector_field( pos, grid, pbc_dim):
+    
+    #Apply PBC
+    for i, size in zip(pbc_dim[0], pbc_dim[1]): pos[:, i] %= size
+    
+    vecs = pos[:, np.newaxis, :] - grid[np.newaxis, :, :]
+    
+    #Apply PBC
+    for i, size in zip(pbc_dim[0], pbc_dim[1]):
+        vecs[:, :, i] = np.where(vecs[:, :, i] >    size / 2, vecs[:, :, i] - size, vecs[:, :, i])
+        vecs[:, :, i] = np.where(vecs[:, :, i] <= - size / 2, vecs[:, :, i] + size, vecs[:, :, i])
+
+    vecs = np.sum( vecs**2, axis = 2)
+
+    return vecs
+
+def vector_field(pos, displacement, nx, ny, grid, idx_grid,  pbc_dim):
+
+    vecs = calc_vector_field( pos = pos, grid = grid, pbc_dim = pbc_dim)
+
+    nearest_grid_indices = vecs.argmin(-1)
+
+    store_vector = np.zeros(( nx, ny, 2), dtype = np.float32)
+    divid_vector = np.zeros(( nx, ny, 2), dtype = np.float32)
+
+    k =0
+    for ix, iy in zip(idx_grid[nearest_grid_indices, 0], idx_grid[nearest_grid_indices, 1]):
+
+        store_vector[ ix, iy , :] += displacement[k]
+        divid_vector[ ix, iy , :] += 1.
+
+        k+=1
+
+    return store_vector / divid_vector
+
+
+
+
+
+
+
+
+
+
+    
         
 
 

@@ -18,6 +18,7 @@ from . import force
 from . import reflection
 from . import metropolis
 from . import clean
+from . import hydrodynamics
 
 class Universe(base):
 
@@ -91,7 +92,9 @@ class Universe(base):
             self.forward_in_time()
             
             #Apply hard wall boundary conditions
-            self.w_universe = self.apply_hard_wall(pos = self.w_universe)
+            if self.bounce_scale == None and len(self.pbc_dim[0]) < 2: self.w_universe = self.apply_hard_wall(pos = self.w_universe) 
+            elif self.bounce_scale != None and len(self.pbc_dim[0]) < 2: self.w_universe = utils.apply_hard_wall_scale(pos = self.w_universe, d = self.displace, hard_wall = self.hard_wall, bounce_scale = self.bounce_scale)
+            else: pass
             
             #Apply hard boundaries
             self.hard_boundaries()
@@ -148,6 +151,7 @@ class Universe(base):
                     
                     f_inside = np.zeros(  (nstchk_frames, self.N), dtype = np.float32 )
     
+        self.last_frame = np.copy(self.w_universe)
         print("Your simulation terminated successfully!")
         print("Have a nice day and thanks for the fish! :-)")
 
@@ -168,6 +172,14 @@ class Universe(base):
             Array storing the initial positions of the universe.
 
         """
+
+        if not isinstance(self.checkpoint_structure, type(None)): 
+
+            assert isinstance(self.checkpoint_structure, type(np.array([]))), 'Checkpoint structure is not numpy.array type!'
+
+            assert self.checkpoint_structure.shape == (self.N, 2), f'Checkpoint structure shape is not correct. Expected ({self.N}, 2), but got {self.checkpoint_structure.shape}!'
+
+            return self.checkpoint_structure
 
         #----------------------------------------------------------------------------------------------------------
         #Standard Workflow
@@ -226,36 +238,97 @@ class Universe(base):
         force_per_particle : numpy.ndarray
             A (N, 2) array representing the forces acting on each particle in the system.
         """
-
+        
         #Generate new pair list
         if (self.frame % self.lj_nstlist) == 1 or self.lj_nstlist == 1: 
-            rij, rij_sq, mask, self.pairlist = force.generate_pairlist(pos       = self.w_universe,
-                                                                       pbc_dim   = self.pbc_dim,
-                                                                       N         = self.N,
-                                                                       lj_buffer = self.lj_buffer,
-                                                                       lj_cutoff = self.lj_cutoff)
+            
+            #Calculate distances and distance vectors for all unique pairs of particles -> COSTLY
+            dist_mat, vec_mat = utils.distance_matrix_NxN(pos = self.w_universe, N = self.N, pbc_dim = self.pbc_dim)
 
-        #Update distances in the pairlist
+            rij, rij_sq, self.pairlist, outer_rij, outer_rij_sq, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat,
+                                                                                                     vec_mat   = vec_mat,
+                                                                                                     pbc_dim   = self.pbc_dim,
+                                                                                                     N         = self.N,
+                                                                                                     lj_buffer = self.lj_buffer)
+
+            if self.hydrodynamics == True:
+
+                #Update diffusion coefficients larger than buffer radius
+                hydro_rij_norm = np.sqrt( outer_rij_sq ).reshape(-1,1)
+
+                hydro_rij_rij  = hydrodynamics.dyadic_product( rij = outer_rij / hydro_rij_norm )
+
+                rpy_far        = hydrodynamics.rpy_far(rij_rij = hydro_rij_rij, r = hydro_rij_norm.reshape(-1, 1, 1), a = self.cutoff_a )
+                rpy_far       *= self.viscosity_scale
+
+                self.Dij[outer_pairlist[:, 0], outer_pairlist[:, 1]] = rpy_far
+                self.Dij[outer_pairlist[:, 1], outer_pairlist[:, 0]] = rpy_far
+
+        #Update distances in the self.pairlist
         else: 
-            rij, rij_sq, mask                = force.update_pairlist(pos         = self.w_universe,
-                                                                     pairlist    = self.pairlist,
-                                                                     pbc_dim     = self.pbc_dim,
-                                                                     lj_cutoff   = self.lj_cutoff)
+            rij, rij_sq = force.update_pairlist(pos       = self.w_universe,
+                                                pairlist  = self.pairlist,
+                                                pbc_dim   = self.pbc_dim)
+        
+            
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        if self.hydrodynamics == True:
+            
 
+            #-----------------------------------------------------------------------------
+            inner_rij, inner_rij_sq, mask, outer_rij, outer_rij_sq = force.filter_pairlist(cutoff = self.cutoff_2a, rij = rij, rij_sq = rij_sq)
+            
+            ###################
+            #INNER
+            hydro_rij_norm = np.sqrt( inner_rij_sq ).reshape(-1,1)
+            hydro_rij_rij  = hydrodynamics.dyadic_product( rij = inner_rij / hydro_rij_norm )
 
-        if not rij_sq.size > 0: return np.zeros( (self.N, 2), dtype = np.float32 ) 
+            rpy_near       = hydrodynamics.rpy_near(rij_rij = hydro_rij_rij, r = hydro_rij_norm.reshape(-1, 1, 1),  a = self.cutoff_a)
+            rpy_near      *= self.viscosity_scale
 
-        assert rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
+            self.Dij[self.pairlist[mask, 0], self.pairlist[mask, 1]] = rpy_near
+            self.Dij[self.pairlist[mask, 1], self.pairlist[mask, 0]] = rpy_near
+            
+            ###################
+            #OUTER
+            hydro_rij_norm = np.sqrt( outer_rij_sq ).reshape(-1,1)
+            hydro_rij_rij  = hydrodynamics.dyadic_product( rij = outer_rij / hydro_rij_norm )
 
-        force_per_particle = force.calculate_force(rij             = rij,
-                                                   rij_sq          = rij_sq,
-                                                   N               = self.N,
-                                                   lj_A12          = self.lj_A12,
-                                                   lj_B6           = self.lj_B6,
-                                                   masked_pairlist = self.pairlist[mask])
+            rpy_far       = hydrodynamics.rpy_far(rij_rij = hydro_rij_rij, r = hydro_rij_norm.reshape(-1, 1, 1),  a = self.cutoff_a)
+            rpy_far      *= self.viscosity_scale
 
+            self.Dij[self.pairlist[~mask, 0], self.pairlist[~mask, 1]] = rpy_far
+            self.Dij[self.pairlist[~mask, 1], self.pairlist[~mask, 0]] = rpy_far
 
+            #-----------------------------------------------------------------------------
+            
+            inner_rij, inner_rij_sq, mask, _, _ = force.filter_pairlist(cutoff = self.lj_cutoff, rij = rij, rij_sq = rij_sq)
+            
+            if not inner_rij_sq.size > 0: return np.zeros( (self.N, 2), dtype = np.float32 ) 
+            assert inner_rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
+            
+            force_per_particle = force.calculate_hydro_force(rij             = inner_rij,
+                                                             rij_sq          = inner_rij_sq,
+                                                             N               = self.N,
+                                                             lj_A12          = self.lj_A12,
+                                                             lj_B6           = self.lj_B6,
+                                                             masked_pairlist = self.pairlist[mask], 
+                                                             Dij             = self.Dij)
+        else:
 
+            inner_rij, inner_rij_sq, mask, _, _ = force.filter_pairlist(cutoff = self.lj_cutoff, rij = rij, rij_sq = rij_sq)
+        
+            if not rij_sq.size > 0: return np.zeros( (self.N, 2), dtype = np.float32 ) 
+            assert rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
+            
+            force_per_particle = force.calculate_force(rij             = inner_rij,
+                                                       rij_sq          = inner_rij_sq,
+                                                       N               = self.N,
+                                                       lj_A12          = self.lj_A12,
+                                                       lj_B6           = self.lj_B6,
+                                                       masked_pairlist = self.pairlist[mask])
+        
         return force_per_particle
     
     def forward_in_time(self):
@@ -273,12 +346,13 @@ class Universe(base):
         The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
         """
 
-        diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
 
-        #Calculate the factor for every particle.
-        factor = np.sqrt( 2 * diff_dt )
+        if any(self.external_forces) and not self.hydrodynamics:
+        
+            diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
 
-        if any(self.external_forces):
+            #Calculate the factor for every particle.
+            factor = np.sqrt( 2 * diff_dt )
 
             #Calculate forces between particles
             force = self.lennard_jones()
@@ -286,7 +360,25 @@ class Universe(base):
             #Calculate the displace vector
             self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
 
-        else: self.displace = factor * np.random.randn( self.N, 2 )
+        elif any(self.external_forces) and self.hydrodynamics:
+
+            #Calculate forces between particles
+            F = self.dt * self.lennard_jones() / self.RT
+
+            L = np.linalg.cholesky(self.Dij).astype(np.float32)
+            #Calculate the displace vector
+            R = hydrodynamics.get_R(L = L, N = self.N, dt = self.dt)
+
+            self.displace = F + R
+
+        else:
+
+            diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
+
+            #Calculate the factor for every particle.
+            factor = np.sqrt( 2 * diff_dt )
+            
+            self.displace = factor * np.random.randn( self.N, 2 )
 
         #Store previous positions
         self.w_universe_prev = np.copy( self.w_universe )
@@ -330,8 +422,8 @@ class Universe(base):
         #Apply periodic boundary conditions for every requested dimension
         for i, size in zip(self.hard_wall[0], self.hard_wall[1]): 
             
-            pos[:, i] = np.where(pos[:, i] < 0   , -1 * pos[:, i]       , pos[:, i])
-            pos[:, i] = np.where(pos[:, i] > size,  2 * size - pos[:, i], pos[:, i])
+            pos[:, i] = np.where(pos[:, i] < 0   , ( -1 * pos[:, i]), pos[:, i])
+            pos[:, i] = np.where(pos[:, i] > size, (2 * size - pos[:, i]), pos[:, i])
 
         return pos
     
@@ -501,12 +593,13 @@ class Universe(base):
                     
                     #This is a correct, but slow, way to get the indices of particles that were in the domain in the previous frame
                     #prev_index_old = utils.check_circ_cond(pos = self.w_universe_prev, mid = mid, r = r_sq, pbc_dim = self.pbc_dim)
-
                     #assert list(prev_index) == list(prev_index_old), f'Problem with new list {prev_index} and old list {prev_index_old}'
                     
                     #--------------------------------------------------------------------------------
                     #Perform Metropolis step if required
                     if any(self.metropolis): index, fix_inside_index = self.double_metropolis_scheme( index = org_index, prev_index = prev_index)
+                    else: 
+                        index = org_index 
 
                     #index is a list of particle indices that are reflected by the boundary 
                     
@@ -538,7 +631,7 @@ class Universe(base):
                                                                           pbc_dim     = self.pbc_dim)
                     
                     #Calculate new position after reflection
-                    new_pos, new_displace  = reflection.calc_reflection(intersection = intersection, p_in = pos_index, n = norm, pbc_dim = self.pbc_dim )
+                    new_pos, new_displace  = reflection.calc_reflection(intersection = intersection, p_in = pos_index, n = norm, pbc_dim = self.pbc_dim, bounce_scale = self.bounce_scale )
 
                     #Update coordinates
                     self.w_universe[index] = new_pos
@@ -909,7 +1002,7 @@ class Universe(base):
         
         print("Start analysis...")
         if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis)
-        else: utils.evaluate_lagtimes_fft(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
+        else: msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
         
         #Convert lagtimes array to physical time
         tau = lagtimes.astype( np.float32 )
@@ -917,7 +1010,7 @@ class Universe(base):
 
         return tau, msd, sd_per_particle
 
-    def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max"):
+    def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max", fft=True):
 
         """
         Mean Square Displacement in one dimension
@@ -949,7 +1042,7 @@ class Universe(base):
         #Convert time to frames
         begin = int( np.round( begin / self.dt / self.nstxout ) )
         stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-        skip  = int( np.round( skip  / self.dt ) )
+        skip  = int( np.round( skip  / self.dt / self.nstxout) )
 
         assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
         
@@ -983,17 +1076,9 @@ class Universe(base):
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
-        #Evalulate lagtimes
-        for i, lag in enumerate(lagtimes):
-
-            if i == 0: continue
-
-            dr = u_storage_analysis[:-lag, :] - u_storage_analysis[lag:, :]
-
-            sqdist = np.square(dr)
-
-            msd[i]             = sqdist.mean()
-            sd_per_particle[i] = sqdist.mean(axis = 0)
+        #msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
+        if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis.reshape(-1, self.N, 1))
+        else: msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
 
         #Convert lagtimes array to physical time
         tau = np.float32(lagtimes)
@@ -1024,12 +1109,143 @@ class Universe(base):
         sqdist = np.square(dr).sum(axis=-1)
 
         #sd_per_particle = sqdist.flatten() #sqdist.mean(axis = 0)
-        sd_per_particle = sqdist.mean(axis = 0)
+        sd_per_particle = sqdist# np.mean(sqdist, axis = 0)#.mean(axis = 0)
 
         print(f'Analysis from {begin * self.dt * self.nstxout / 1000 / 1000} to {stop * self.dt * self.nstxout / 1000 / 1000}')
         print(f'MSD Distribution at {lag * self.dt * self.nstxout / 1000 / 1000} ms') 
 
         return sd_per_particle
+    
+    def mean_square_displacement_distr_vectors(self, tau, grid_spacing = 1, begin = 0, stop = None):
+        
+        if stop == None: stop = self.nsteps * self.dt
+ 
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert (stop - begin) >= tau, 'Error. Time lag is larger than time interval!'
+
+        #Convert time to frames
+        begin = int( np.round( begin / self.dt / self.nstxout ) )
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
+       
+        #Load data
+        self.load_data_unwrap()
+        
+        u_storage_analysis = self.u_storage[begin:stop]
+
+        lag = int( np.round(tau / self.dt / self.nstxout) )
+
+        dr = u_storage_analysis[lag:, :, :] - u_storage_analysis[:-lag, :, :]
+
+        dr = dr[::1]
+
+        storage = []
+
+        grid, idx_grid, full_grid, nx, ny = utils.generate_grid(size_x = self.size_x,
+                                                                size_y = self.size_y,
+                                                                grid_spacing = grid_spacing)
+
+        for i, dr_i in tqdm( enumerate(dr), total = dr.shape[0] ):
+
+            storage_i = utils.vector_field(pos = self.u_storage[:-lag, :, :][i], 
+                                           displacement = dr_i,
+                                           grid = grid,
+                                           idx_grid = idx_grid,
+                                           nx = nx, 
+                                           ny = ny,
+                                           pbc_dim = self.pbc_dim)
+
+
+            storage.append(storage_i) 
+
+
+        #-------------------------------------------------------------------------------------------------------------------
+        #Plotting
+
+        cyberpunk_theme = {
+                           'axes.edgecolor': 'white',
+                           'axes.facecolor': '#1d1f21',
+                           'axes.labelcolor': 'white',
+                           'axes.titlecolor': 'white',
+                           'figure.facecolor': '#1d1f21',
+                           'xtick.color': 'white',
+                           'ytick.color': 'white',
+                           'text.color': 'white',
+                           'grid.color': 'gray',
+                           'grid.linestyle': ':'
+                          }
+
+        # Set cyberpunk theme as default
+        plt.style.use(cyberpunk_theme)
+
+        #Cyperpunk
+        fig, ax = plt.subplots()
+
+        for spine in ['left', 'right', 'bottom', 'top']:
+            ax.spines[spine].set_color('#66ccff')
+            ax.spines[spine].set_linewidth(2)
+        ax.tick_params(axis='x', colors='#66ccff')
+        ax.tick_params(axis='y', colors='#66ccff')
+
+
+        storage = np.array(storage)
+        
+        storage_mean = np.nanmean( storage, axis = 0)
+
+        ax.quiver(full_grid[:, :, 0], full_grid[:, :, 1], storage_mean[:,:,0], storage_mean[:,:,1], scale = 5.0,
+                   color = 'hotpink',
+                   angles='xy',
+                   scale_units='xy',
+                   units = 'xy',
+                   pivot = 'mid', alpha = 1.)#, cmap='magma', C = arrow_length)
+
+        ax.set_aspect('equal')
+        
+        plt.savefig(f"{self.output}_vector_field.png", dpi = 300)
+        
+        plt.close()
+        #------------------------------------------------------------
+        
+        #Cyperpunk
+        fig, ax = plt.subplots(subplot_kw=dict(projection="polar"))
+
+        ax.set_theta_zero_location(loc = 'N')
+        ax.set_theta_direction(-1)
+
+        #for spine in ['left', 'right', 'bottom', 'top']:
+        #    ax.spines[spine].set_color('#66ccff')
+        #    ax.spines[spine].set_linewidth(2)
+        #ax.tick_params(axis='x', colors='#66ccff')
+        #ax.tick_params(axis='y', colors='#66ccff')
+
+        arrow_length = np.sqrt(np.nansum(storage**2, axis = -1))
+
+        storage = storage / arrow_length[:, :, :, np.newaxis]
+
+        x_angle_distr = np.clip(a = np.sum(storage * np.array([1., 0.]), axis = -1), a_min = -1, a_max = 1)
+        x_angle_distr = np.arccos( x_angle_distr )
+
+        x_angle_distr = np.where(storage[:, :, :, 1] < 0, (2*np.pi - x_angle_distr), x_angle_distr)
+
+        y_angle_distr = np.clip(a = np.sum(storage * np.array([0., 1.]), axis = -1), a_min = -1, a_max = 1)
+        y_angle_distr = np.arccos( y_angle_distr )
+
+        print(storage.shape)
+        
+        y_angle_distr = np.where(storage[:, :, :, 0] < 0, (2*np.pi - y_angle_distr), y_angle_distr)
+
+        
+        ax.hist(x_angle_distr.flatten(), bins = np.linspace(0, 2*np.pi, 51), histtype = 'step', label = 'x-axis', density = True, color = 'hotpink')
+        ax.hist(y_angle_distr.flatten(), bins = np.linspace(0, 2*np.pi, 51), histtype = 'step', label = 'y-axis', density = True, color = '#66ccff')
+
+        #plt.legend()
+
+        plt.savefig(f"{self.output}_vector_field_angles.png", dpi = 300)
+
+
+        print(f'Analysis from {begin * self.dt * self.nstxout / 1000 / 1000} to {stop * self.dt * self.nstxout / 1000 / 1000}')
+        print(f'MSD Distribution at {lag * self.dt * self.nstxout / 1000 / 1000} ms') 
+
     
     @staticmethod
     def mean_square_displacement_fit(tau, msd, dim = 2, begin = 0, stop = None):

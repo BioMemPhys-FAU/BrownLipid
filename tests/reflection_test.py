@@ -443,24 +443,40 @@ def test_reflection_workflow(mid, r, prev_index, points, prev_points, index, in_
     #Update coordinates
     points[index]      = new_pos
 
-    #--------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------------                                                      
     #There are rare (!) cases in which the particle is placed inside/outside the domain after the reflection
     #The following lines handle with such edge cases
-
     #Identify misplaced particles
     real_index_in_domains  = index[     utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = pbc_dim) ]
-    real_index_out_domains = np.setdiff1d( ar1 = index, ar2 = real_index_in_domains, assume_unique = True)
-
-    #Ideally escaped and captured would be empty
-    escaped  = np.setdiff1d(ar1 = index_in_domains,  ar2 =  real_index_in_domains, assume_unique = True)
-    captured = np.setdiff1d(ar1 = index_out_domains, ar2 = real_index_out_domains, assume_unique = True)
+    real_index_out_domains = utils.get_elements_only_in_a(a = index, b = real_index_in_domains, assume_unique = True)                      
     
-
-    #The misplaced particles are just re-assigned
-    in_domains[ escaped  ] = False
+    #Ideally escaped and captured would be empty
+    escaped  = utils.get_elements_only_in_a( a= index_in_domains, b = real_index_in_domains, assume_unique = True)
+    captured = utils.get_elements_only_in_a( a= index_out_domains, b = real_index_out_domains, assume_unique = True)
+    
+    in_domains[ escaped  ] = False                                                                                                    
     in_domains[ captured ] = True
+    
+    not_reflected_index = utils.get_elements_only_in_a( a= org_index, b = index, assume_unique = True)
 
-    not_reflected_index = np.setdiff1d( ar1 = org_index, ar2 = index, assume_unique =True)
+#    #--------------------------------------------------------------------------------
+#    #There are rare (!) cases in which the particle is placed inside/outside the domain after the reflection
+#    #The following lines handle with such edge cases
+#
+#    #Identify misplaced particles
+#    real_index_in_domains  = index[     utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = pbc_dim) ]
+#    real_index_out_domains = np.setdiff1d( ar1 = index, ar2 = real_index_in_domains, assume_unique = True)
+#
+#    #Ideally escaped and captured would be empty
+#    escaped  = np.setdiff1d(ar1 = index_in_domains,  ar2 =  real_index_in_domains, assume_unique = True)
+#    captured = np.setdiff1d(ar1 = index_out_domains, ar2 = real_index_out_domains, assume_unique = True)
+#    
+#
+#    #The misplaced particles are just re-assigned
+#    in_domains[ escaped  ] = False
+#    in_domains[ captured ] = True
+#
+#    not_reflected_index = np.setdiff1d( ar1 = org_index, ar2 = index, assume_unique =True)
     prev_index =  np.union1d(ar1 = not_reflected_index, ar2 = real_index_in_domains)
 
     np.testing.assert_equal(in_domains, true_in_domains)
