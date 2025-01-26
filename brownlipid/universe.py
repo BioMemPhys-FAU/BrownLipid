@@ -87,6 +87,9 @@ class Universe(base):
             #Evolve particle position
 
             self.frame = i
+            
+            #Apply soft boundaries
+            self.soft_boundaries()
 
             #Move particles in time
             self.forward_in_time()
@@ -246,10 +249,8 @@ class Universe(base):
             dist_mat, vec_mat = utils.distance_matrix_NxN(pos = self.w_universe, N = self.N, pbc_dim = self.pbc_dim)
 
             rij, rij_sq, self.pairlist, outer_rij, outer_rij_sq, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat,
-                                                                                                     vec_mat   = vec_mat,
-                                                                                                     pbc_dim   = self.pbc_dim,
-                                                                                                     N         = self.N,
-                                                                                                     lj_buffer = self.lj_buffer)
+                                                                                                          vec_mat   = vec_mat,
+                                                                                                          lj_buffer = self.lj_buffer)
 
             if self.hydrodynamics == True:
 
@@ -266,7 +267,8 @@ class Universe(base):
 
         #Update distances in the self.pairlist
         else: 
-            rij, rij_sq = force.update_pairlist(pos       = self.w_universe,
+            rij, rij_sq = force.update_pairlist(ref_pos   = self.w_universe,
+                                                conf_pos  = self.w_universe,
                                                 pairlist  = self.pairlist,
                                                 pbc_dim   = self.pbc_dim)
         
@@ -355,7 +357,7 @@ class Universe(base):
             factor = np.sqrt( 2 * diff_dt )
 
             #Calculate forces between particles
-            force = self.lennard_jones()
+            force = self.lennard_jones() + self.force_per_particle_from_domains
 
             #Calculate the displace vector
             self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
@@ -363,7 +365,7 @@ class Universe(base):
         elif any(self.external_forces) and self.hydrodynamics:
 
             #Calculate forces between particles
-            F = self.dt * self.lennard_jones() / self.RT
+            F = self.dt * (self.lennard_jones() + self.force_per_particle_from_domains) / self.RT
 
             L = np.linalg.cholesky(self.Dij).astype(np.float32)
             #Calculate the displace vector
@@ -565,22 +567,24 @@ class Universe(base):
         If rejected, the particle is reflected depending on the geometry of the domain. 
 
 
-        """
-        
-        self.d_coeffs[:] = self.base_d_coeff
+        """ 
         
         #If called but no geometry for a domain is stored
-        if not any(self.hard_boundaries_geometry): pass
+        if not any(self.hard_boundaries_geometry) or self.hard_boundaries_geometry['Type'] == 'Soft': pass
 
         else:
+            
+            self.d_coeffs[:] = self.base_d_coeff
 
             #---------------------------------------------------------------------------------------
             #Iterate over stored geometries
             for key, geometry in self.hard_boundaries_geometry.items():
 
+                if key == 'Type': continue
+
                 #Circular hard boundary
-                if 'c' in key:
-                    
+                elif 'c' in key:
+                
                     #--------------------------------------------------------------------------------
                     #Calculate real distances
                     mid        = self.hard_boundaries_geometry[key][0]
@@ -662,241 +666,67 @@ class Universe(base):
                     #Update diffusion coefficients
                     self.d_coeffs[ self.hard_boundaries_geometry[key][3] ] = diff_coeff
 
-                        
-                    """
-                    try:
-                        assert np.all( index_in_domains == index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = (r + 1E-3 )**2, pbc_dim = self.pbc_dim) ] )
-                    except:
+                else: raise ValueError("Currently I cannot handle the provided geometry.")
+    
+    
+    def soft_boundaries(self):
 
-                        print('Error points are not in circle, but are expected to be in circle!')
+        """
+        Function to handle domains with soft boundaries.
 
-                        with open("debug_file.txt", "w") as f:
+        """ 
+        
+        self.force_per_particle_from_domains = np.zeros( (self.N, 2), dtype = np.float32 )
+        
+        #If called but no geometry for a domain is stored
+        if not any(self.hard_boundaries_geometry) or self.hard_boundaries_geometry['Type'] == 'Hard': pass
 
-                            f.write("Indices of all reflected particles:\n")
-                            for idx in index: f.write(f"{idx}\n")
-                            f.write("\n")
-                            
-                            f.write("Index of particles that should remain in domain after reflection:")
-                            for idx in index_in_domains: f.write(f"{idx}\n")
-                            f.write("\n")
-                            
-                            f.write("Index of particles that are in domain after reflection:")
-                            real_in_domains = index[ utils.check_circ_cond(pos = new_pos, mid = mid, r = r_sq, pbc_dim = self.pbc_dim) ]
-                            for idx in real_in_domains: f.write(f"{idx}\n")
-                            f.write("\n")
+        else:
 
-                        np.save(file = self.output + "_debug_p.npy"           , arr = new_pos)
-                        np.save(file = self.output + "_debug_p_older.npy"     , arr = self.w_universe_prev[index])
-                        np.save(file = self.output + "_debug_p_old.npy"       , arr = self.w_universe[index])
-                        np.save(file = self.output + "_debug_intersection.npy", arr = intersection)
-                        raise ValueError('')
-                    
-                    #Update positions
-                    self.w_universe[index] = new_pos
-                    """
+            
+            #---------------------------------------------------------------------------------------
+            #Iterate over stored geometries
+            for key, geometry in self.hard_boundaries_geometry.items():
 
-                #TODO: Check polygon reflection
-                #Square hard boundary
-                elif 'p' in key:
-                    
-                    raise ValueError("Currently not properly tested!")
-                    
+                if key == "Type": continue
+
+                #Circular hard boundary
+                elif 'c' in key:
+                
+                    #--------------------------------------------------------------------------------
                     #Calculate real distances
+                    mid        = self.hard_boundaries_geometry[key][0]
+                    r          = self.hard_boundaries_geometry[key][1]
+                    r_sq       = self.hard_boundaries_geometry[key][2]
+                    prev_index = self.hard_boundaries_geometry[key][3]
+                    diff_coeff = self.hard_boundaries_geometry[key][4]
+                    pairlist   = self.hard_boundaries_geometry[key][5]
                     #--------------------------------------------------------------------------------
-                    edges      = self.hard_boundaries_geometry[key][0:4]
-                    Lx         = self.hard_boundaries_geometry[key][4]
-                    Ly         = self.hard_boundaries_geometry[key][5] 
-                    mid        = self.hard_boundaries_geometry[key][6].reshape(1, 2)
-                    diff_coeff = self.hard_boundaries_geometry[key][7]
-                    #--------------------------------------------------------------------------------
+
+                    #Generate new pair list
+                    if (self.frame % self.lj_nstlist) == 1 or self.lj_nstlist == 1:
+
+                        #The vectors pointing from particles to domains
+                        dist_mat, vec_mat = utils.distance_matrix_NxM(ref_pos = mid, conf_pos = self.w_universe, N = 1, M = self.N, pbc_dim = self.pbc_dim)
+                        rij_pairlist, rij_sq_pairlist, pairlist, _, _, _ = force.generate_pairlist(dist_mat = dist_mat, vec_mat = vec_mat, lj_buffer = (self.lj_buffer_org + r)**2)
+
+                        self.hard_boundaries_geometry[key][5] = pairlist
+
+                    else:
+                        
+                        #The vectors pointing from particles to domains
+                        rij_pairlist, rij_sq_pairlist = force.update_pairlist(ref_pos = mid, conf_pos = self.w_universe, pairlist = pairlist, pbc_dim = self.pbc_dim)
+
+
+                    rij, rij_sq, mask, _, _ = force.filter_pairlist(cutoff = (self.lj_cutoff_org + r)**2, rij = rij_pairlist, rij_sq = rij_sq_pairlist)
                     
-                    condition = True
-                    counter = 0
-                    while condition:
+                    rij_sq_real = (np.sqrt(rij_sq) - r)**2
+                    rij_real    = (rij_sq_real / rij_sq).reshape(-1, 1) * rij
 
-                        index      = utils.check_square_cond(pos = self.w_universe     , Lx = Lx, Ly = Ly, mid = mid)
-                        prev_index = utils.check_square_cond(pos = self.w_universe_prev, Lx = Lx, Ly = Ly, mid = mid)
-                        
-                        if any(self.metropolis): index = self.double_metropolis_scheme( index, prev_index )
-                        
-                        if not index.size > 0: 
-                            condition = False
-                            continue
+                    if self.hydrodynamics == True: self.force_per_particle_from_domains += force.calculate_hydro_force_from_domain(rij = rij_real, rij_sq = rij_sq_real, N = self.N, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, masked_pairlist = pairlist[mask], Dij = self.Dij)
+                    else: self.force_per_particle_from_domains += force.calculate_force_from_domain(rij = rij_real, rij_sq = rij_sq_real, N = self.N, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, masked_pairlist = pairlist[mask])
 
-                        #--------------------------------------------------------------------------------
-
-                        norm, intersection = self.get_normals_polygon(points   = self.w_universe[ index ],
-                                                                      displace = self.displace[ index ],
-                                                                      edges    = edges,
-                                                                      Lx       = Lx,
-                                                                      Ly       = Ly)
-                
-                        new_pos, d_new = self.calc_reflection(intersection = intersection, p_in = self.w_universe[index], n = norm , pbc_dim = self.pbc_dim)
-                
-                        self.w_universe_prev[index] = intersection
-                        self.displace[index]        = d_new
-                        self.w_universe[index]      = new_pos
-                    
-                        counter += 1
-                        
-                        assert counter < 2, 'Weird'
-
-                    index = utils.check_square_cond(pos = self.w_universe,
-                                                     Lx = Lx,
-                                                     Ly = Ly,
-                                                    mid = mid)
-                        
-                    #Update diffusion coefficients
-                    self.d_coeffs[ index ] = diff_coeff
-                
-                else:
-                    raise ValueError("Currently I cannot handle the provided geometry.")
-    
-    
-
-    #---------------------------------------------------------------------------------------------------------------------
-    #Normal calculation
-
-    def get_point_between_points(self, p, d, e1, e2, Lx, Ly):
-
-        c = e1 - p
-        c = utils.apply_pbc_vector(c)
-        
-        vert = (e2 - e1)
-        vert = utils.apply_pbc_vector(vert.reshape(1, -1) )[0]
-        
-        if vert.sum() == 0: vert = (e2 - e1)
-
-        t = utils.perpDot(c , vert) / utils.perpDot(d, vert)
-
-        intersection = p + t.reshape(-1, 1) * d
-
-        #----------------------------------------------------------
-        true_intersection = np.ones( p.shape[0] , dtype = bool)
-        #Check if point is on vector
-
-        e1_inter = intersection - e1
-        e1_inter = utils.apply_pbc_vector(e1_inter)
-        
-        e2_inter = intersection - e2
-        e2_inter = utils.apply_pbc_vector(e2_inter)
-
-        e1_inter2 = np.sum((e1_inter)**2, axis = 1)
-        e2_inter2 = np.sum((e2_inter)**2, axis = 1)
-        e1_e22    = np.sum(vert**2)
-
-        check = e1_inter2 + e2_inter2 + 2 * np.sqrt(e1_inter2 * e2_inter2)
-
-        cond = (check - e1_e22) >= 1E-8
-        
-        true_intersection[ cond ] = False
-        
-        #---------------------------------------------------------
-        #Check if point is on vector
-
-        p_inter = intersection - p
-        p_inter = utils.apply_pbc_vector(p_inter)
-
-        prev_pos = p-d
-
-        prev_pos = self.apply_pbc(pos = prev_pos.reshape(-1, 2))
-        
-        prev_inter = intersection - prev_pos
-        prev_inter = utils.apply_pbc_vector(prev_inter)
-
-        p_inter2    = np.sum(   (p_inter)**2, axis = 1)
-        prev_inter2 = np.sum((prev_inter)**2, axis = 1)
-        prev_p2      = np.sum(d**2, axis = 1)
-
-        check = p_inter2 + prev_inter2 + 2 * np.sqrt(p_inter2 * prev_inter2)
-
-        cond = np.abs(check - prev_p2) >= 1E-8
-        
-        true_intersection[ cond ] = False
-        #---------------------------------------------------------
-        
-        cond = np.abs( np.sqrt(prev_inter2) ) <= 1E-8
-        true_intersection[ cond ] = False
-        
-        intersection[~true_intersection] = np.array([1E-8, 1E-8])
-
-
-        return intersection, true_intersection, vert
-
-    def get_normals_polygon(self, points, displace, edges, Lx, Ly):
-
-        """
-        Get the normal vector of a two dimensional two dimension polygon for a point
-
-        points := numpy.ndarray
-            coordinates of reflected points
-        edges := list
-            list of polygon edges
-        
-        """
-
-        edges = edges + [edges[0]]
-        
-        number_of_vertices = len(edges) - 1
-
-        final_norm         = np.zeros( (points.shape[0], 2), dtype = np.float32)
-        final_intersection = np.zeros( (points.shape[0], 2), dtype = np.float32)
-
-        for i in range( len(edges) - 2 + 1 ):
-
-            polygon_point_a = edges[i]
-            polygon_point_b = edges[i+1]
-    
-            intersection, true_intersection, a_to_b = self.get_point_between_points(p = points,
-                                                                                    d = displace,
-                                                                                   e1 = polygon_point_a,
-                                                                                   e2 = polygon_point_b,
-                                                                                   Lx = Lx,
-                                                                                   Ly = Ly)
-
-            if   a_to_b.sum() > 0.0: norm = polygon_point_a - intersection
-
-            elif a_to_b.sum() < 0.0: norm = polygon_point_b - intersection
-
-            else: raise ValueError(f"Fuck. Value of vertices: {a_to_b}. A: {polygon_point_a} B: {polygon_point_b}")
-            
-            norm = utils.apply_pbc_vector(norm)
-            norm = np.flip(norm, axis = 1)
-            norm[:, 0] *= -1
-
-            norm /= np.linalg.norm(norm, axis = 1).reshape(-1, 1)
-
-            norm[~true_intersection] = np.array([0.0, 0.0])
-
-
-            final_norm += norm
-            final_intersection += intersection
-
-        len_norm = np.linalg.norm(final_norm, axis = 1)
-
-        if not ( np.all( np.abs( len_norm - 1.) < 1E-8) == True and np.all( final_intersection[:, 0] < self.size_x ) == True and np.all( final_intersection[:, 1] < self.size_y ) == True):
-
-            print('Norm')
-            print(final_norm)
-            print('Intersection')
-            print(final_intersection)
-            print('Positions')
-            print(points)
-            print('Prev Points')
-            print(points-displace)
-            
-            print( 'Check' )
-            print( len_norm[ np.abs( len_norm - 1.) >= 1E-8 ] )
-
-            np.save(arr = points, file = 'debug_points.npy')
-            np.save(arr = displace, file = 'debug_displace.npy')
-            np.save(arr = final_intersection, file = 'debug_intersection.npy')
-
-            raise ValueError("Normals are not normalized! Saved actual states as debug_points.npy and debug_displace.npy!")
-
-        return final_norm, final_intersection
-    
-                    
+                else: raise ValueError("Currently I cannot handle the provided geometry.")
 
     #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     #Analysis part

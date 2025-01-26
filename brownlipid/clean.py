@@ -55,24 +55,17 @@ def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, size_x, siz
         #Iterate over geometries
         for key, geometry in geometry_collection.items():
 
+            if key == "Type": continue
+
             #Circular domains
-            if 'c' in key:
+            elif 'c' in key:
 
                 #Get indices of particles in circular domains
                 in_bound_idx_key = utils.check_circ_cond(pos     = cleaned_init_pos,
                                                          mid     = geometry[0].reshape(1, 2),
-                                                         r       = geometry[1]**2,
+                                                         r       = (geometry[1] + 2**(1/6) * 0.6 * lj_sig)**2,
                                                          pbc_dim = pbc_dim)
 
-            #Rectangular domains
-            elif 'p' in key:
-
-                #Get indices of particles in rectangular domains
-                in_bound_idx_key = utils.check_square_cond(pos = cleaned_init_pos,
-                                                           Lx  = geometry[4],
-                                                           Ly  = geometry[5],
-                                                           mid = geometry[6].reshape(1, 2))  
-            
             else: raise ValueError(f'Key {key} not known!') 
             
             #Append to larger storage array

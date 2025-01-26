@@ -144,7 +144,130 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
 
     return force_per_particle
 
-def generate_pairlist(dist_mat, vec_mat, N, lj_buffer):
+@jit(nopython=True)
+def calculate_force_from_domain(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
+
+    """
+    Core function for force calculation.
+
+    The function calculate the pair-wise additive forces between particles derived from a Lennard-Jones potential
+
+        V(r) = 4 * eps * ( (sig/r)^12 - (sig/r)^6 )         (1)
+
+    r is the distance between two particles; sig and eps are parameters of the Lennard-Jones potential pre-defined by the user.
+
+    Parameters
+    ----------
+
+    rij             := numpy.ndarray
+        Directional vectors from particle j to i.
+    rij_sq          := numpy.ndarray
+        Squared distances between particle j and i.
+    N               := int
+        Number of particles in the system.
+    lj_A12          := float
+        Lennard Jones parameter for the repulsive part. User-defined.
+    lj_B6           := float
+        Lennard Jones parameter for the attractive part. User-defined.
+    masked_pairlist := numpy.ndarray
+        Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
+
+
+    """
+    
+    #Calculate inverse of the squared distance
+    inv_rij_sq = 1.0 / rij_sq
+
+    #Calculate powers for the attractive and the repulsive part of the Lennard-Jones potential
+    sr6        = inv_rij_sq ** 3
+    sr12       = sr6 ** 2
+
+    #Calculate "scaling factor" for the force
+    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
+
+    #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
+    force = force.reshape(-1, 1) * rij
+
+    #Storage factor for the force per particle
+    force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
+
+    #Iterate over all particle pairs in the pairlist with a pair distance below the VdW cutoff
+    k = 0
+    for pair in masked_pairlist:
+
+        #Extract pair
+        i, j = pair[0], pair[1]
+
+        #Apply Newton's third law: Actio est reactio 
+        force_per_particle[j] -= force[k] #Force is acting on i, therefore addition
+        k += 1
+
+    return force_per_particle
+
+@jit(nopython=True)
+def calculate_hydro_force_from_domain(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
+
+    """
+    Core function for force calculation.
+
+    The function calculate the pair-wise additive forces between particles derived from a Lennard-Jones potential
+
+        V(r) = 4 * eps * ( (sig/r)^12 - (sig/r)^6 )         (1)
+
+    r is the distance between two particles; sig and eps are parameters of the Lennard-Jones potential pre-defined by the user.
+
+    Parameters
+    ----------
+
+    rij             := numpy.ndarray
+        Directional vectors from particle j to i.
+    rij_sq          := numpy.ndarray
+        Squared distances between particle j and i.
+    N               := int
+        Number of particles in the system.
+    lj_A12          := float
+        Lennard Jones parameter for the repulsive part. User-defined.
+    lj_B6           := float
+        Lennard Jones parameter for the attractive part. User-defined.
+    masked_pairlist := numpy.ndarray
+        Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
+
+
+    """
+    
+    #Calculate inverse of the squared distance
+    inv_rij_sq = 1.0 / rij_sq
+
+    #Calculate powers for the attractive and the repulsive part of the Lennard-Jones potential
+    sr6        = inv_rij_sq ** 3
+    sr12       = sr6 ** 2
+
+    #Calculate "scaling factor" for the force
+    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
+    
+    #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
+    force = force.reshape(-1, 1) * rij
+
+    #Storage factor for the force per particle
+    force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
+
+    #Iterate over all particle pairs in the pairlist with a pair distance below the VdW cutoff
+    k = 0
+    for pair in masked_pairlist:
+
+        #Extract pair
+        i, j = pair[0], pair[1]
+
+        force_k = np.array([ np.sum(Dij[j,j][0] * force[k]), np.sum(Dij[j,j][1] * force[k]) ], dtype = np.float32 )
+
+        #Apply Newton's third law: Actio est reactio 
+        force_per_particle[j] -= force_k #Equal force is acting on j, therefore subtraction
+
+        k += 1
+
+    return force_per_particle
+
+def generate_pairlist(dist_mat, vec_mat, lj_buffer):
 
     """
     Pair list generation. A pair list keeps track of neighboured particles to speed up the force calculation.
@@ -154,8 +277,6 @@ def generate_pairlist(dist_mat, vec_mat, N, lj_buffer):
 
     pos       := numpy.ndarray
         Position of the particles. Expected are 2-dimensional positions.
-    N         := int
-        Number of particles in the system.
     pbc_dim   := tuple
         Contains two list. The first list contains indices of axes with PBC. The second list contains the length of the corresponding axes.
     lj_buffer := float
@@ -207,15 +328,17 @@ def filter_pairlist(cutoff, rij, rij_sq):
     return inner_rij, inner_rij_sq, mask, outer_rij, outer_rij_sq
 
 @jit(nopython=True)
-def update_pairlist(pos, pairlist, pbc_dim):
+def update_pairlist(ref_pos, conf_pos, pairlist, pbc_dim):
 
     """
     This function is called if a pairlist was generated in a previous step.
 
     Parameters
     ----------
-    pos       := numpy.ndarray
-        Position of the particles. Expected are 2-dimensional positions.
+    ref_pos       := numpy.ndarray
+        Position of the reference particles. Expected are 2-dimensional positions.
+    conf_pos       := numpy.ndarray
+        Position of the configuration particles. Expected are 2-dimensional positions.
     pairlist  := numpy.ndarray
         Full pairlist. Contains unique particle pairs that had a distance below lj_buffer during its generation.
     pbc_dim   := tuple
@@ -235,18 +358,25 @@ def update_pairlist(pos, pairlist, pbc_dim):
     """
 
     # Get the maximum valid index
-    max_index = pos.shape[0] - 1
+    max_index_N = ref_pos.shape[0] - 1
+    max_index_M = conf_pos.shape[0] - 1
     
     # Check each index in the pairlist
-    for idx in pairlist.flat:
-        if idx < 0 or idx > max_index:
+    for idx in pairlist[:, 0]:
+        if idx < 0 or idx > max_index_N:
             # Raise an IndexError with a descriptive message
-            raise IndexError(f"Index {idx} is out of bounds for array with {pos.shape[0]} elements")
+            raise IndexError(f"Index {idx} is out of bounds for arrays with {ref_pos.shape} elements")
+    
+    # Check each index in the pairlist
+    for idx in pairlist[:, 1]:
+        if idx < 0 or idx > max_index_M:
+            # Raise an IndexError with a descriptive message
+            raise IndexError(f"Index {idx} is out of bounds for arrays with {conf_pos.shape} elements")
     
     
     #Current distances between particle pairs in pairlist
     #Distance vector points from second column to first column -> j -> i, because first column denotes row of the NxN distance matrix
-    rij    = pos[ pairlist[:, 0] ] - pos[ pairlist[:, 1]]
+    rij    = ref_pos[ pairlist[:, 0] ] - conf_pos[ pairlist[:, 1]]
     
     #Apply periodic boundary conditions
     for k, size in zip(pbc_dim[0], pbc_dim[1]):

@@ -98,6 +98,56 @@ def distance_matrix_NxN(pos, N, pbc_dim):
     return dist_mat, vec_mat
 
 @jit(nopython=True)
+def distance_matrix_NxM(ref_pos, conf_pos, N, M, pbc_dim):
+
+    """
+    Calculate distance matrix between all possible pairs of particles in ref_pos and pos array.
+    This function is computational expensive, and for the sake of performance it should be called as rarley as possible.
+    However, increasing the call frequency could improve the accuracy of the simulation.
+    
+    Improvements taken from:
+    https://github.com/Allen-Tildesley/examples/blob/master/python_examples/md_lj_module.py
+
+    Parameters
+    ----------
+
+    ref_pos     := numpy.ndarray
+        Reference positional vector. Expects two-dimensional coordinates -> (N, 2)
+    conf_pos     := numpy.ndarray
+        Configuration positional vector. Expects two-dimensional coordinates -> (M, 2)
+    N       := int
+        Number of reference particles in the system. E.g. Brownian particles
+    M       := int
+        Number of configuration particles in the system. E.g. Domains
+    pbc_dim := tuple
+        First list contains index of dimensions along which PBC is applied. Second list contains length of box vector along which PBC is applied.
+
+    Returns
+    -------
+
+    vec_mat  := numpy.ndarray
+        Squared distances between particles.
+    dist_mat := numpy.ndarray
+        Distance vectors between particles.
+
+
+    """
+
+    #rij is the vector that points from (i+1) to i, or otherwise that points from j to i.
+    rij    = ref_pos[:, np.newaxis, :] - conf_pos[np.newaxis, :, :]
+
+    #Apply periodic boundary conditions
+    for k, size in zip(pbc_dim[0], pbc_dim[1]):
+        rij[:, :, k] = np.where(rij[:, :, k] >    size / 2, rij[:, :, k] - size, rij[:, :, k])
+        rij[:, :, k] = np.where(rij[:, :, k] <= - size / 2, rij[:, :, k] + size, rij[:, :, k])
+
+
+    #For the force calculation later only the squared distance is required, therefore the square root operation is omitted.
+    rij_sq = np.sum(rij**2,axis=2)
+
+    return rij_sq, rij
+
+@jit(nopython=True)
 def apply_pbc_vector(vec, pbc_dim) -> np.ndarray:
 
         """
@@ -151,6 +201,113 @@ def apply_hard_wall_scale(pos, d, hard_wall, bounce_scale):
 
 
     return pos
+
+@jit(nopython=True)
+def apply_soft_wall_force(pos, hard_wall, lj_cutoff, lj_A12, lj_B6):
+
+    """
+    Walls interact via Lennard-Jones interactions with particles.
+    Force is only acting on particles, walls have "infinite" mass.
+
+    pos := numpy.ndarray
+        Position of particles. Shape is (N, 2)
+    hard_wall := tuple
+        Information about which box vectors are hard walls. ([INDEX], [SIZE])
+    lj_cutoff := float
+        Cutoff for Lennard-Jones interactions. Particles with larger distance than lj_cutoff are not taken into account.
+    lj_A12 := float
+        Parameter for Lennard-Jones potential.
+    lj_B6 := float
+        Parameter for Lennard-Jones potential.
+
+    """
+
+    force_from_wall = np.zeros_like(pos, dtype=np.float32)
+
+    if not hard_wall[0]: return force_from_wall
+
+    for i, size in zip(hard_wall[0], hard_wall[1]):
+        
+        # Distances from walls
+        ri_lo = pos[:, i]
+        ri_up = size - ri_lo
+
+        # Squared distances
+        ri_sq_lo = ri_lo**2
+        ri_sq_up = ri_up**2
+
+        # Mask for particles within cutoff
+        lj_mask = (ri_sq_lo <= lj_cutoff) | (ri_sq_up <= lj_cutoff)
+
+        if not np.any(lj_mask): continue
+
+        # Select minimum squared distance
+        ri_sq = np.minimum(ri_sq_lo[lj_mask], ri_sq_up[lj_mask])
+
+        # Prevent division by zero
+        inv_ri_sq = 1.0 / ri_sq
+
+        # Lennard-Jones force calculation
+        sr6 = inv_ri_sq ** 3
+        sr12 = sr6 ** 2
+        force = (lj_A12 * sr12 - lj_B6 * sr6) * inv_ri_sq
+
+        # Determine force direction
+        force_direction = np.where(ri_sq_lo[lj_mask] <= ri_sq_up[lj_mask], ri_lo[lj_mask], -ri_up[lj_mask])
+
+        force_from_wall[lj_mask, i] += force * force_direction
+
+    return force_from_wall
+
+@jit(nopython=True)
+def apply_soft_wall_force_hydro(pos, hard_wall, lj_cutoff, lj_A12, lj_B6, Dij, N):
+
+    """
+    Periodic boundary conditions for POSITIONAL VECTORS a.k.a. POINTS.
+
+    Particles leaving the box on one site, enter the box again from the opposite site.
+    Since, a simple rectangular box shape is used as unit cell the modulo operator is applied here.
+
+    """
+    
+    force_from_wall = np.zeros_like(pos, dtype=np.float32)
+
+    if not hard_wall[0]: return force_from_wall
+
+    for i, size in zip(hard_wall[0], hard_wall[1]):
+        
+        # Distances from walls
+        ri_lo = pos[:, i]
+        ri_up = size - ri_lo
+
+        # Squared distances
+        ri_sq_lo = ri_lo**2
+        ri_sq_up = ri_up**2
+
+        # Mask for particles within cutoff
+        lj_mask = (ri_sq_lo <= lj_cutoff) | (ri_sq_up <= lj_cutoff)
+
+        if not np.any(lj_mask): continue
+
+        # Select minimum squared distance
+        ri_sq = np.minimum(ri_sq_lo[lj_mask], ri_sq_up[lj_mask])
+
+        # Prevent division by zero
+        inv_ri_sq = 1.0 / ri_sq
+
+        # Lennard-Jones force calculation
+        sr6 = inv_ri_sq ** 3
+        sr12 = sr6 ** 2
+        force = (lj_A12 * sr12 - lj_B6 * sr6) * inv_ri_sq
+
+        # Determine force direction
+        force_direction = np.where(ri_sq_lo[lj_mask] <= ri_sq_up[lj_mask], ri_lo[lj_mask], -ri_up[lj_mask])
+
+        force_from_wall[lj_mask, i] += force * force_direction
+
+    for i in range(N): force_from_wall[i] = np.array([ np.sum(Dij[i,i][0] * force_from_wall[i]), np.sum(Dij[i,i][1] * force_from_wall[i]) ], dtype = np.float32 )
+
+    return force_from_wall
 
 @jit(nopython=True)
 def check_circ_cond(pos, mid, r, pbc_dim):
@@ -456,7 +613,6 @@ def vector_field(pos, displacement, nx, ny, grid, idx_grid,  pbc_dim):
         k+=1
 
     return store_vector / divid_vector
-
 
 
 

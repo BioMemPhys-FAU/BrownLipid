@@ -20,6 +20,7 @@ class base:
                           nstchk:                      int = 1, 
                     base_d_coeff:                    float = 1.,
                  hard_boundaries:                     dict = {},
+                        softwall:                     bool = False,
                     bounce_scale:       Union[None, float] = None,
             checkpoint_structure:  Union[None, np.ndarray] = None,
                    hydrodynamics:                     bool = False,
@@ -93,7 +94,8 @@ class base:
 
         if any( hard_boundaries ):
 
-            hard_boundaries_geometry = {}
+            if softwall == True: hard_boundaries_geometry = {'Type': "Soft"}
+            else: hard_boundaries_geometry = {'Type': "Hard"}
 
             self.total_area_domains = 0
             
@@ -117,7 +119,7 @@ class base:
                                                              r,
                                                              r ** 2,
                                                              prev_index,
-                                                             diff_coeff
+                                                             diff_coeff,
                                                              pairlist
                                                              ]
 
@@ -140,35 +142,7 @@ class base:
                             hard_boundaries[key][i][3] = ran_mid_i[1]
 
 
-
-                elif key == 'Rectangle':
-                    
-                    for i, geometry in enumerate(geometries):
-                        
-                        diff_coeff = geometry[0]
-                        mx         = geometry[1]
-                        my         = geometry[2]
-                        Lx         = geometry[3]
-                        Ly         = geometry[4]
-
-                        #Generate rectangle edges clockwise
-                        #Increase rectangle slightly in positive x- and y-direction
-                        edges = []
-
-                        edges.append( np.array([ mx - Lx/2 , my - Ly/2 ]) )
-                        edges.append( np.array([ mx - Lx/2 , my + Ly/2 ]) )
-                        edges.append( np.array([ mx + Lx/2 , my + Ly/2 ]) )
-                        edges.append( np.array([ mx + Lx/2 , my - Ly/2 ]) )
-                        
-                        #hard_boundaries_geometry[f"p{i}"] = [ np.array([ edge[0] % self.size_x, edge[1] % self.size_y ]) for edge in edges ]
-                        hard_boundaries_geometry[f"p{i}"] = [ np.array([ edge[0], edge[1] ]) for edge in edges ]
-                        
-                        hard_boundaries_geometry[f"p{i}"].append( Lx )
-                        hard_boundaries_geometry[f"p{i}"].append( Ly )
-                        hard_boundaries_geometry[f"p{i}"].append( np.array( [ mx, my ] ) )
-                        hard_boundaries_geometry[f"p{i}"].append( diff_coeff )
-                        
-                        self.total_area_domains += Lx * Ly
+                else: raise ValueError("Don't know geometry!")
 
             self.hard_boundaries_geometry = hard_boundaries_geometry
             self.hard_boundaries_final    = hard_boundaries
@@ -220,6 +194,10 @@ class base:
             #Only squared sums are considerd later
             self.lj_cutoff  = external_forces['r_vdw']**2
             self.lj_buffer  = external_forces['r_list']**2
+            
+            #Only squared sums are considerd later
+            self.lj_cutoff_org  = external_forces['r_vdw']
+            self.lj_buffer_org  = external_forces['r_list']
 
         if self.hydrodynamics == True: 
 
