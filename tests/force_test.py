@@ -40,7 +40,9 @@ outer_pairlist_true = np.array([
                                 [0, 2],
                                 [1, 3]])
 
-test1 = (dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true)
+offsets = np.zeros((N,N), dtype = np.float32)
+
+test1 = (dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, offsets, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true)
 
 ####################
 
@@ -84,12 +86,14 @@ outer_pairlist_true = np.array([
                                 [1, 4],
                                 [3, 4]])
 
-test2 = (dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true)
+offsets = np.zeros((N,N), dtype = np.float32)
 
-@pytest.mark.parametrize("dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true", [test1, test2])
-def test_generate_pairlist(dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true):
+test2 = (dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, offsets, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true)
 
-    rij, rij_sq, pairlist, outer_rij, outer_rij_sq, outer_pairlist = force.generate_pairlist(dist_mat = dist_mat, vec_mat = vec_mat, N = N, lj_buffer = lj_buffer)
+@pytest.mark.parametrize("dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, offsets, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true", [test1, test2])
+def test_generate_pairlist(dist_mat, vec_mat, N, lj_buffer, rij_true, rij_sq_true, offsets, pairlist_true, outer_rij_true, outer_rij_sq_true, outer_pairlist_true):
+
+    rij, rij_sq, pairlist, outer_rij, outer_rij_sq, outer_pairlist = force.generate_pairlist(dist_mat = dist_mat, vec_mat = vec_mat, lj_buffer = lj_buffer)
 
     np.testing.assert_allclose(rij,    rij_true)
     np.testing.assert_allclose(rij_sq, rij_sq_true)
@@ -119,8 +123,10 @@ def test_update_pairlist_no_pbc():
     # Periodic boundary conditions
     pbc_dim = ([0, 1], [1000, 1000])
 
+    offsets = np.zeros((3, 3), dtype = np.float32)
+
     # Call the function
-    rij, rij_sq = force.update_pairlist(pos, pairlist, pbc_dim)
+    rij, rij_sq = force.update_pairlist(pos, pos, pairlist, pbc_dim, offsets[pairlist[:, 0], pairlist[:, 1]])
 
     # Expected distance vectors
     expected_rij = np.array([
@@ -129,7 +135,7 @@ def test_update_pairlist_no_pbc():
     ])
 
     # Expected squared distances
-    expected_rij_sq = np.array([2.0, 18.0])
+    expected_rij_sq = np.sqrt( np.array([2.0, 18.0]) )
 
     # Assertions
     np.testing.assert_array_almost_equal(rij, expected_rij)
@@ -154,8 +160,10 @@ def test_update_pairlist_with_pbc():
     # Periodic boundary conditions on both x and y axes with box size 10
     pbc_dim = ([0, 1], [10.0, 10.0])
     
+    offsets = np.zeros((3, 3), dtype = np.float32)
+    
     # Call the function
-    rij, rij_sq = force.update_pairlist(pos, pairlist, pbc_dim)
+    rij, rij_sq = force.update_pairlist(pos, pos, pairlist, pbc_dim, offsets[pairlist[:, 0], pairlist[:, 1]])
     
     # Expected distance vector (wrapped around)
     # Distance from (9.9, 9.9) to (0.1, 0.1)
@@ -164,7 +172,7 @@ def test_update_pairlist_with_pbc():
     ])
     
     # Expected squared distance
-    expected_rij_sq = np.array([0.08])
+    expected_rij_sq = np.sqrt( np.array([0.08]) )
     
     # Assertions
     np.testing.assert_array_almost_equal(rij, expected_rij)
@@ -182,10 +190,10 @@ def test_update_pairlist_input_validation():
     
     # Test with invalid pairlist
     with pytest.raises(IndexError):
-        force.update_pairlist(pos, np.array([[10, 1]]), ([1], [23]) )
+        force.update_pairlist(pos, pos, np.array([[10, 1]]), ([1], [23]), np.zeros(2) )
     
     # Test with mismatched PBC dimensions
-    force.update_pairlist(pos, np.array([[0, 1]]), ([0], [10.0, 20.0]))
+    force.update_pairlist(pos, pos, np.array([[0, 1]]), ([0], [10.0, 20.0]), np.zeros(2))
 
 def test_calculate_force_basic_symmetry():
     """

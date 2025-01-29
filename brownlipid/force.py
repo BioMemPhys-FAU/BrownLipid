@@ -123,6 +123,7 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
     
     #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
     force = force.reshape(-1, 1) * rij
+    force = force.astype(np.float32)
 
     #Storage factor for the force per particle
     force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
@@ -134,133 +135,10 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
         #Extract pair
         i, j = pair[0], pair[1]
 
-        force_k = np.array([ np.sum(Dij[i,j][0] * force[k]), np.sum(Dij[i,j][1] * force[k]) ], dtype = np.float32 )
+        force_k = Dij[i,j] @ force[k] # np.array([ np.sum(Dij[i,j][0] * force[k]), np.sum(Dij[i,j][1] * force[k]) ], dtype = np.float32 )
 
         #Apply Newton's third law: Actio est reactio 
         force_per_particle[i] += force_k
-        force_per_particle[j] -= force_k #Equal force is acting on j, therefore subtraction
-
-        k += 1
-
-    return force_per_particle
-
-@jit(nopython=True)
-def calculate_force_from_domain(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
-
-    """
-    Core function for force calculation.
-
-    The function calculate the pair-wise additive forces between particles derived from a Lennard-Jones potential
-
-        V(r) = 4 * eps * ( (sig/r)^12 - (sig/r)^6 )         (1)
-
-    r is the distance between two particles; sig and eps are parameters of the Lennard-Jones potential pre-defined by the user.
-
-    Parameters
-    ----------
-
-    rij             := numpy.ndarray
-        Directional vectors from particle j to i.
-    rij_sq          := numpy.ndarray
-        Squared distances between particle j and i.
-    N               := int
-        Number of particles in the system.
-    lj_A12          := float
-        Lennard Jones parameter for the repulsive part. User-defined.
-    lj_B6           := float
-        Lennard Jones parameter for the attractive part. User-defined.
-    masked_pairlist := numpy.ndarray
-        Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
-
-
-    """
-    
-    #Calculate inverse of the squared distance
-    inv_rij_sq = 1.0 / rij_sq
-
-    #Calculate powers for the attractive and the repulsive part of the Lennard-Jones potential
-    sr6        = inv_rij_sq ** 3
-    sr12       = sr6 ** 2
-
-    #Calculate "scaling factor" for the force
-    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
-
-    #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
-    force = force.reshape(-1, 1) * rij
-
-    #Storage factor for the force per particle
-    force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
-
-    #Iterate over all particle pairs in the pairlist with a pair distance below the VdW cutoff
-    k = 0
-    for pair in masked_pairlist:
-
-        #Extract pair
-        i, j = pair[0], pair[1]
-
-        #Apply Newton's third law: Actio est reactio 
-        force_per_particle[j] -= force[k] #Force is acting on i, therefore addition
-        k += 1
-
-    return force_per_particle
-
-@jit(nopython=True)
-def calculate_hydro_force_from_domain(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
-
-    """
-    Core function for force calculation.
-
-    The function calculate the pair-wise additive forces between particles derived from a Lennard-Jones potential
-
-        V(r) = 4 * eps * ( (sig/r)^12 - (sig/r)^6 )         (1)
-
-    r is the distance between two particles; sig and eps are parameters of the Lennard-Jones potential pre-defined by the user.
-
-    Parameters
-    ----------
-
-    rij             := numpy.ndarray
-        Directional vectors from particle j to i.
-    rij_sq          := numpy.ndarray
-        Squared distances between particle j and i.
-    N               := int
-        Number of particles in the system.
-    lj_A12          := float
-        Lennard Jones parameter for the repulsive part. User-defined.
-    lj_B6           := float
-        Lennard Jones parameter for the attractive part. User-defined.
-    masked_pairlist := numpy.ndarray
-        Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
-
-
-    """
-    
-    #Calculate inverse of the squared distance
-    inv_rij_sq = 1.0 / rij_sq
-
-    #Calculate powers for the attractive and the repulsive part of the Lennard-Jones potential
-    sr6        = inv_rij_sq ** 3
-    sr12       = sr6 ** 2
-
-    #Calculate "scaling factor" for the force
-    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
-    
-    #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
-    force = force.reshape(-1, 1) * rij
-
-    #Storage factor for the force per particle
-    force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
-
-    #Iterate over all particle pairs in the pairlist with a pair distance below the VdW cutoff
-    k = 0
-    for pair in masked_pairlist:
-
-        #Extract pair
-        i, j = pair[0], pair[1]
-
-        force_k = np.array([ np.sum(Dij[j,j][0] * force[k]), np.sum(Dij[j,j][1] * force[k]) ], dtype = np.float32 )
-
-        #Apply Newton's third law: Actio est reactio 
         force_per_particle[j] -= force_k #Equal force is acting on j, therefore subtraction
 
         k += 1
@@ -328,7 +206,7 @@ def filter_pairlist(cutoff, rij, rij_sq):
     return inner_rij, inner_rij_sq, mask, outer_rij, outer_rij_sq
 
 @jit(nopython=True)
-def update_pairlist(ref_pos, conf_pos, pairlist, pbc_dim):
+def update_pairlist(ref_pos, conf_pos, pairlist, pbc_dim, offsets):
 
     """
     This function is called if a pairlist was generated in a previous step.
@@ -384,6 +262,9 @@ def update_pairlist(ref_pos, conf_pos, pairlist, pbc_dim):
         rij[:, k] = np.where(rij[:, k] <= - size / 2, rij[:, k] + size, rij[:, k])
 
     #Calculate squared distances
-    rij_sq = np.sum(rij**2, axis = 1)
     
-    return rij, rij_sq
+    rij_       = np.sqrt( np.sum(rij**2,axis=1) )
+    rij_offset = rij_ - offsets
+
+    #Store the squared distances and distance vectors in the arrays
+    return ( rij_offset / rij_ ).reshape(-1, 1) * rij, rij_offset

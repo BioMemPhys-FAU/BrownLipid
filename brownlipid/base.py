@@ -52,7 +52,7 @@ class base:
         self.temp                 = temp
         self.RT                   = 8.3145 * 1E-3 * self.temp
         self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
-
+        self.softwall             = softwall
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
         assert self.nstchk >= self.nstxout, "Frequency of output (nstxout) must be smaller than frequency of checkpoints (nstchk)!"
@@ -88,9 +88,14 @@ class base:
         
         self.pbc_dim   = (pbc_index, pbc_size)
         self.hard_wall = (hard_wall_index, hard_wall_size)                
+        
 
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #Init Domains with hard boundary conditions
+        
+        self.domain_coords = np.array([]).reshape(0,2)
+        self.domain_radii  = []
+        self.n_domains     = 0
 
         if any( hard_boundaries ):
 
@@ -105,14 +110,19 @@ class base:
 
                     for i, geometry in enumerate(geometries):
 
-                        mx         = geometry[2]
-                        my         = geometry[3]
-                        r          = geometry[1]
-                        diff_coeff = geometry[0]
-                        prev_index = np.array([], dtype = np.int64) #Indices of particles inside circle in the previous frame
-                        pairlist   = np.array([], dtype = np.int64)
+                        mx           = geometry[2]
+                        my           = geometry[3]
+                        r            = geometry[1]
+                        diff_coeff   = geometry[0]
+                        prev_index   = np.array([], dtype = np.int64) #Indices of particles inside circle in the previous frame
+                        pairlist     = np.array([], dtype = np.int64)
+                        Dij_boundary = np.ones( ( self.N, 1, 2, 2), dtype = np.float32 ) * np.nan
+
+                        self.domain_radii.append( r )
 
                         mid = np.array([mx,my]).reshape(1, 2)
+                        
+                        self.domain_coords = np.vstack( ( self.domain_coords, mid) )
 
                         hard_boundaries_geometry[f"c{i}"] = [
                                                              mid,
@@ -120,7 +130,8 @@ class base:
                                                              r ** 2,
                                                              prev_index,
                                                              diff_coeff,
-                                                             pairlist
+                                                             pairlist,
+                                                             Dij_boundary
                                                              ]
 
                         self.total_area_domains += np.pi * r**2
@@ -129,6 +140,8 @@ class base:
 
                         print("Random placement of domains requested!")
                         print("Attention! Previous coordinates will be overwritten!")
+            
+                        self.domain_coords = np.array([]).reshape(0,2)
 
                         ran_mid = utils.distribute_domains_random_same_radius(number  = len(geometries),
                                                                               r       = r,
@@ -140,12 +153,19 @@ class base:
                             hard_boundaries_geometry[f"c{i}"][0] = ran_mid_i.reshape(1, 2)
                             hard_boundaries[key][i][2] = ran_mid_i[0]
                             hard_boundaries[key][i][3] = ran_mid_i[1]
+                        
+                            self.domain_coords = np.vstack( (self.domain_coords, ran_mid_i.reshape(1, 2)) )
 
 
                 else: raise ValueError("Don't know geometry!")
 
             self.hard_boundaries_geometry = hard_boundaries_geometry
             self.hard_boundaries_final    = hard_boundaries
+
+            self.n_domains = self.domain_coords.shape[0]
+            self.domain_radii = np.array(self.domain_radii)
+
+            self.pd_pairlist = np.array([], dtype = np.int64)
 
         else: self.hard_boundaries_geometry = {}
         
@@ -175,16 +195,17 @@ class base:
             elif 'Inside'     in self.metropolis.keys() and 'Barrier'     in self.metropolis.keys(): raise ValueError('Can handle either Inside or Barrier for Metropolis. But not both!')
 
             else: raise ValueError('Can not handle metropolis request!')
-
         
         #This parameter is needed later for initializing positions and must be defined also if no external forces are requested
         self.lj_sig = -1000
 
         if any(external_forces):
 
-            #Pre-calculate lennard-jones parameters to sped up calculations
+            #Pre-calculate lennard-jones parameters to speed up calculations
             self.lj_sig = external_forces['sigma']
             self.lj_eps = external_forces['epsilon']
+
+            self.rmin   = self.lj_sig * 2**(1/6)
 
             self.lj_A12 = 48 * self.lj_eps * self.lj_sig**12
             self.lj_B6  = 24 * self.lj_eps * self.lj_sig**6
@@ -192,42 +213,43 @@ class base:
             self.lj_nstlist = external_forces['nstlist']
             
             #Only squared sums are considerd later
-            self.lj_cutoff  = external_forces['r_vdw']**2
-            self.lj_buffer  = external_forces['r_list']**2
+            self.lj_cutoff  = external_forces['r_vdw']
+            self.lj_buffer  = external_forces['r_list']
             
-            #Only squared sums are considerd later
-            self.lj_cutoff_org  = external_forces['r_vdw']
-            self.lj_buffer_org  = external_forces['r_list']
-
-        if self.hydrodynamics == True: 
-
-            self.cutoff_2a = ( 2**(1/6) * external_forces['sigma'] )**2
-            self.cutoff_a  =  2**(1/6) * external_forces['sigma'] / 2
+            #Init empty pairlist -> Will be changed in the first step of the simulations
+            self.pp_pairlist = np.array([])
             
-            self.Dij = np.ones( (self.N, self.N, 2, 2), dtype = np.float32 ) * np.nan
+            #Prepare a matrix for offsets (hard sphere domains)
+            self.N_p_Domains = self.N + self.n_domains
 
-            self.viscosity_scale =(1.380649 * self.temp) / ( self.viscosity * np.pi )
+            self.offsets = np.zeros( (self.N_p_Domains, self.N_p_Domains) , dtype = np.float32)
 
-            print( self.viscosity_scale, (6 * self.cutoff_a), self.cutoff_a)
+            for i in range(self.N_p_Domains):
+                for j in range(self.N_p_Domains):
 
-            self.Dij[range(self.N), range(self.N)] = np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a)
+                    if i >= self.N and j >= self.N: self.offsets[i, j] = ((self.domain_radii[i%self.N] - self.rmin) + (self.domain_radii[j%self.N]-self.rmin))/2
+                    elif i >= self.N:               self.offsets[i, j] = self.domain_radii[i%self.N] - self.rmin
+                    elif j >= self.N:               self.offsets[i, j] = self.domain_radii[j%self.N] - self.rmin
+                    else: pass
 
-            print(np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a))
+            if self.hydrodynamics == True: 
 
+                self.cutoff_2a = 2 * self.rmin
+                self.cutoff_a  =  self.rmin
+                
+                self.Dij = np.ones( (self.N_p_Domains, self.N_p_Domains, 2, 2), dtype = np.float32 ) * np.nan
 
-    #--------------------------------------------------------------------------------------------------------------------------------------------------------------
-    #Define functions
-    
-    def base_apply_pbc_vector(self, vec):
+                self.viscosity_scale        = (1.380649 * self.temp) / ( self.viscosity * np.pi )
+                self.domain_viscosity_scale = (1.380649 * self.temp) / ( self.viscosity * np.pi )
 
-        #Apply PBC
-        vec[0] = np.where(vec[0] >    self.size_x / 2, vec[0] - self.size_x, vec[0])
-        vec[0] = np.where(vec[0] <= - self.size_x / 2, vec[0] + self.size_x, vec[0])
+                print( self.viscosity_scale, (6 * self.cutoff_a), self.cutoff_a)
+                
+                print(np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a))
+                
+                self.Dij[range(self.N_p_Domains), range(self.N_p_Domains)] = np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a)
 
-        vec[1] = np.where(vec[1] >    self.size_y / 2, vec[1] - self.size_y, vec[1])
-        vec[1] = np.where(vec[1] <= - self.size_y / 2, vec[1] + self.size_y, vec[1])
+                
 
-        return vec
 
 
     

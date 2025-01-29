@@ -3,7 +3,7 @@ import numpy as np
 #Import custom modules
 from . import utils
 
-def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, size_x, size_y):
+def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, hard_wall, soft_wall, size_x, size_y, offsets):
 
     """
     The function should remove initials position of particles from domains (either hard boundaries or different diffusion coefficients).
@@ -52,6 +52,7 @@ def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, size_x, siz
         #Init empty array to store particles indices in domains
         in_bound_idx = np.array([], dtype = np.int64)
 
+        #--------------------------------------------------------------
         #Iterate over geometries
         for key, geometry in geometry_collection.items():
 
@@ -63,7 +64,7 @@ def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, size_x, siz
                 #Get indices of particles in circular domains
                 in_bound_idx_key = utils.check_circ_cond(pos     = cleaned_init_pos,
                                                          mid     = geometry[0].reshape(1, 2),
-                                                         r       = (geometry[1] + 2**(1/6) * 0.6 * lj_sig)**2,
+                                                         r       = geometry[1]**2,
                                                          pbc_dim = pbc_dim)
 
             else: raise ValueError(f'Key {key} not known!') 
@@ -75,12 +76,24 @@ def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, size_x, siz
         #Resample particles that are spatially to close
         if lj_sig > 0:
 
-            dist_mat, vec_mat = utils.distance_matrix_NxN(pos = cleaned_init_pos, N = N, pbc_dim = pbc_dim)
+            dist_mat, vec_mat = utils.distance_matrix_NxN(pos = cleaned_init_pos, N = N, pbc_dim = pbc_dim, offsets = offsets)
             dist_mat          = dist_mat.min(axis = 1)
 
-            close_idx = np.where( dist_mat < (lj_sig * 2**(1/6) * 0.6 )**2 )
+            close_idx = np.where( dist_mat < (lj_sig * 2**(1/6) * 0.6 ) )
         
             in_bound_idx = np.append( in_bound_idx, close_idx )
+        
+        #--------------------------------------------------------------
+        #Resample particles  that are too close to a wall with a soft Lennard-Jones potential
+        if lj_sig > 0 and soft_wall == True and len(pbc_dim[0]) < 2:
+
+            for idx, size in zip( hard_wall[0], hard_wall[1]):
+
+                close_idx = np.where( cleaned_init_pos[:, idx] < (lj_sig * 2**(1/6) ) )
+                in_bound_idx = np.append( in_bound_idx, close_idx )
+                
+                close_idx = np.where( cleaned_init_pos[:, idx] > (size - (lj_sig * 2**(1/6) )) )
+                in_bound_idx = np.append( in_bound_idx, close_idx )
                 
         print(f"There are {in_bound_idx.shape[0]} particles that need to be resampled! Please stay patienced!")
         

@@ -75,6 +75,8 @@ class Universe(base):
         #Store initial fraction of particles in domains
         f_inside[0] = self.in_domains
 
+        self.force_from_wall = np.zeros((self.N, 2), dtype = np.float32)
+
         #---------------------------------------------------------------------------------------------------------------------
         #Main Iteration
 
@@ -88,15 +90,29 @@ class Universe(base):
 
             self.frame = i
             
+            if self.softwall == True and len(self.pbc_dim[0]) < 2:
+
+                if self.hydrodynamics == True: 
+                    self.force_from_wall = utils.apply_soft_wall_force_hydro(pos       = self.w_universe,
+                                                                             hard_wall = self.hard_wall,
+                                                                             lj_cutoff = self.lj_cutoff,
+                                                                             lj_A12    = self.lj_A12,
+                                                                             lj_B6     = self.lj_B6,
+                                                                             Dij       = self.Dij,
+                                                                             N         = self.N)
+
+                else: self.force_from_wall = utils.apply_soft_wall_force(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6)
+            
             #Apply soft boundaries
-            self.soft_boundaries()
+            #self.soft_boundaries()
+            #self.soft_boundaries_fast()
 
             #Move particles in time
             self.forward_in_time()
             
             #Apply hard wall boundary conditions
-            if self.bounce_scale == None and len(self.pbc_dim[0]) < 2: self.w_universe = self.apply_hard_wall(pos = self.w_universe) 
-            elif self.bounce_scale != None and len(self.pbc_dim[0]) < 2: self.w_universe = utils.apply_hard_wall_scale(pos = self.w_universe, d = self.displace, hard_wall = self.hard_wall, bounce_scale = self.bounce_scale)
+            if self.bounce_scale == None and len(self.pbc_dim[0]) < 2 and self.softwall == False: self.w_universe = self.apply_hard_wall(pos = self.w_universe) 
+            elif self.bounce_scale != None and len(self.pbc_dim[0]) < 2 and self.softwall == False: self.w_universe = utils.apply_hard_wall_scale(pos = self.w_universe, d = self.displace, hard_wall = self.hard_wall, bounce_scale = self.bounce_scale)
             else: pass
             
             #Apply hard boundaries
@@ -200,8 +216,11 @@ class Universe(base):
                                        N                   = self.N,
                                        lj_sig              = self.lj_sig,
                                        pbc_dim             = self.pbc_dim,
+                                       hard_wall           = self.hard_wall,
+                                       soft_wall           = self.softwall,
                                        size_x              = self.size_x,
-                                       size_y              = self.size_y)
+                                       size_y              = self.size_y,
+                                       offsets             = self.offsets[:self.N, :self.N])
 
         #----------------------------------------------------------------------------------------------------------
         #Make some tests if the particle coordinates are in the box
@@ -218,7 +237,9 @@ class Universe(base):
         return init_pos
 
     #--------------------------------------------------------------------------------------------------------------
-    def lennard_jones(self):
+    
+    @staticmethod
+    def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets, hydrodyn = False, cutoff_a = 0, cutoff_2a = 0, viscosity_scale = 0, Dij = 0):
 
         """
         Compute the Lennard-Jones forces acting on each particle in the system.
@@ -243,95 +264,90 @@ class Universe(base):
         """
         
         #Generate new pair list
-        if (self.frame % self.lj_nstlist) == 1 or self.lj_nstlist == 1: 
+        if (frame % nstlist) == 1 or nstlist == 1: 
             
             #Calculate distances and distance vectors for all unique pairs of particles -> COSTLY
-            dist_mat, vec_mat = utils.distance_matrix_NxN(pos = self.w_universe, N = self.N, pbc_dim = self.pbc_dim)
+            dist_mat, vec_mat = utils.distance_matrix_NxN(pos     = conf_pos,
+                                                          N       = conf_pos.shape[0],
+                                                          pbc_dim = pbc_dim,
+                                                          offsets = offsets)
 
-            rij, rij_sq, self.pairlist, outer_rij, outer_rij_sq, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat,
-                                                                                                          vec_mat   = vec_mat,
-                                                                                                          lj_buffer = self.lj_buffer)
+            #### BUFFER RADIUS
+            #Pairlist       -> Contains everything that is inside the buffer radius of a particle
+            #Outer Pairlist -> Contains everything that is outside the buffer radius of a particle
+            pairlist_rij, pairlist_rij_sqrt, pairlist, outer_pairlist_rij, outer_pairlist_rij_sqrt, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat,
+                                                                                                                                            vec_mat   = vec_mat,
+                                                                                                                                            lj_buffer = buffer_radius)
 
-            if self.hydrodynamics == True:
+            if hydrodyn == True:
 
+                #Hydrodynamics requested
+                #Calculate Diffusion coefficients between particles outside the buffer radius
+        
                 #Update diffusion coefficients larger than buffer radius
-                hydro_rij_norm = np.sqrt( outer_rij_sq ).reshape(-1,1)
+                rpy_far        = hydrodynamics.rpy_far(rij_sq = outer_pairlist_rij_sqrt, rij = outer_pairlist_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
 
-                hydro_rij_rij  = hydrodynamics.dyadic_product( rij = outer_rij / hydro_rij_norm )
-
-                rpy_far        = hydrodynamics.rpy_far(rij_rij = hydro_rij_rij, r = hydro_rij_norm.reshape(-1, 1, 1), a = self.cutoff_a )
-                rpy_far       *= self.viscosity_scale
-
-                self.Dij[outer_pairlist[:, 0], outer_pairlist[:, 1]] = rpy_far
-                self.Dij[outer_pairlist[:, 1], outer_pairlist[:, 0]] = rpy_far
+                Dij[outer_pairlist[:, 0], outer_pairlist[:, 1]] = rpy_far
+                Dij[outer_pairlist[:, 1], outer_pairlist[:, 0]] = rpy_far
 
         #Update distances in the self.pairlist
         else: 
-            rij, rij_sq = force.update_pairlist(ref_pos   = self.w_universe,
-                                                conf_pos  = self.w_universe,
-                                                pairlist  = self.pairlist,
-                                                pbc_dim   = self.pbc_dim)
+
+            #Update pairlist -> Update every distance and distance vector inside the buffer radius of a particle
+            pairlist_rij, pairlist_rij_sqrt = force.update_pairlist(ref_pos   = ref_pos,
+                                                                    conf_pos  = conf_pos,
+                                                                    pairlist  = pairlist,
+                                                                    pbc_dim   = pbc_dim,
+                                                                    offsets   = offsets[ pairlist[:, 0], pairlist[:, 1] ])
         
+        #### INNER RADIUS
+        #Obtain effective distances and distance vectors that are taking into account for the LJ interaction between particles
+        effective_rij, effective_rij_sqrt, effective_mask, _, _ = force.filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+        
+        if hydrodyn == True:
+
+            #Hydrodynamics requested
+            near_rij, near_rij_sqrt, near_mask, far_rij, far_rij_sqrt = force.filter_pairlist(cutoff = cutoff_2a, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+        
+            #NEAR FIELD DIFFUSION
+            rpy_near        = hydrodynamics.rpy_near(rij_sq = near_rij_sqrt, rij = near_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
             
-        #----------------------------------------------------------------------------------------------------------------------------------------------
-        #----------------------------------------------------------------------------------------------------------------------------------------------
-        if self.hydrodynamics == True:
+            Dij[ pairlist[ near_mask, 0], pairlist[ near_mask, 1]] = rpy_near
+            Dij[ pairlist[ near_mask, 1], pairlist[ near_mask, 0]] = rpy_near
             
+            #FAR FIELD DIFFUSION
+            rpy_far        = hydrodynamics.rpy_far(rij_sq = far_rij_sqrt, rij = far_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
 
-            #-----------------------------------------------------------------------------
-            inner_rij, inner_rij_sq, mask, outer_rij, outer_rij_sq = force.filter_pairlist(cutoff = self.cutoff_2a, rij = rij, rij_sq = rij_sq)
-            
-            ###################
-            #INNER
-            hydro_rij_norm = np.sqrt( inner_rij_sq ).reshape(-1,1)
-            hydro_rij_rij  = hydrodynamics.dyadic_product( rij = inner_rij / hydro_rij_norm )
-
-            rpy_near       = hydrodynamics.rpy_near(rij_rij = hydro_rij_rij, r = hydro_rij_norm.reshape(-1, 1, 1),  a = self.cutoff_a)
-            rpy_near      *= self.viscosity_scale
-
-            self.Dij[self.pairlist[mask, 0], self.pairlist[mask, 1]] = rpy_near
-            self.Dij[self.pairlist[mask, 1], self.pairlist[mask, 0]] = rpy_near
-            
-            ###################
-            #OUTER
-            hydro_rij_norm = np.sqrt( outer_rij_sq ).reshape(-1,1)
-            hydro_rij_rij  = hydrodynamics.dyadic_product( rij = outer_rij / hydro_rij_norm )
-
-            rpy_far       = hydrodynamics.rpy_far(rij_rij = hydro_rij_rij, r = hydro_rij_norm.reshape(-1, 1, 1),  a = self.cutoff_a)
-            rpy_far      *= self.viscosity_scale
-
-            self.Dij[self.pairlist[~mask, 0], self.pairlist[~mask, 1]] = rpy_far
-            self.Dij[self.pairlist[~mask, 1], self.pairlist[~mask, 0]] = rpy_far
+            Dij[ pairlist[ ~near_mask, 0], pairlist[ ~near_mask, 1]] = rpy_far
+            Dij[ pairlist[ ~near_mask, 1], pairlist[ ~near_mask, 0]] = rpy_far
 
             #-----------------------------------------------------------------------------
             
-            inner_rij, inner_rij_sq, mask, _, _ = force.filter_pairlist(cutoff = self.lj_cutoff, rij = rij, rij_sq = rij_sq)
-            
-            if not inner_rij_sq.size > 0: return np.zeros( (self.N, 2), dtype = np.float32 ) 
-            assert inner_rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
-            
-            force_per_particle = force.calculate_hydro_force(rij             = inner_rij,
-                                                             rij_sq          = inner_rij_sq,
-                                                             N               = self.N,
-                                                             lj_A12          = self.lj_A12,
-                                                             lj_B6           = self.lj_B6,
-                                                             masked_pairlist = self.pairlist[mask], 
-                                                             Dij             = self.Dij)
+            if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
+            assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
+        
+            force_per_particle = force.calculate_hydro_force(rij             = effective_rij,
+                                                             rij_sq          = effective_rij_sqrt**2,
+                                                             N               = ref_pos.shape[0],
+                                                             lj_A12          = A12,
+                                                             lj_B6           = B6,
+                                                             masked_pairlist = pairlist[ effective_mask ], 
+                                                             Dij             = Dij)
+
         else:
 
-            inner_rij, inner_rij_sq, mask, _, _ = force.filter_pairlist(cutoff = self.lj_cutoff, rij = rij, rij_sq = rij_sq)
-        
-            if not rij_sq.size > 0: return np.zeros( (self.N, 2), dtype = np.float32 ) 
-            assert rij_sq.min() >= 1E-12, f'Too small! {rij_sq.min()}'
+            if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
+            assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
             
-            force_per_particle = force.calculate_force(rij             = inner_rij,
-                                                       rij_sq          = inner_rij_sq,
-                                                       N               = self.N,
-                                                       lj_A12          = self.lj_A12,
-                                                       lj_B6           = self.lj_B6,
-                                                       masked_pairlist = self.pairlist[mask])
-        
-        return force_per_particle
+            force_per_particle = force.calculate_force(rij             = effective_rij,
+                                                       rij_sq          = effective_rij_sqrt**2,
+                                                       N               = ref_pos.shape[0],
+                                                       lj_A12          = A12,
+                                                       lj_B6           = B6,
+                                                       masked_pairlist = pairlist[ effective_mask ])
+     
+
+        return force_per_particle, pairlist, Dij
     
     def forward_in_time(self):
 
@@ -347,6 +363,8 @@ class Universe(base):
         In this implementation D is an array (self.d_coeffs) that stores the diffusion coefficient of every particle.
         The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
         """
+        
+        w_universe_domains = np.vstack((self.w_universe, self.domain_coords))
 
 
         if any(self.external_forces) and not self.hydrodynamics:
@@ -357,7 +375,20 @@ class Universe(base):
             factor = np.sqrt( 2 * diff_dt )
 
             #Calculate forces between particles
-            force = self.lennard_jones() + self.force_per_particle_from_domains
+            lj_force, self.pp_pairlist, _ = self.lennard_jones(frame         = self.frame,
+                                                               nstlist       = self.lj_nstlist,
+                                                               ref_pos       = w_universe_domains,
+                                                               conf_pos      = w_universe_domains,
+                                                               pbc_dim       = self.pbc_dim,
+                                                               buffer_radius = self.lj_buffer,
+                                                               vdw_cutoff    = self.lj_cutoff,
+                                                               pairlist      = self.pp_pairlist,
+                                                               A12           = self.lj_A12,
+                                                               B6            = self.lj_B6,
+                                                               hydrodyn      = self.hydrodynamics,
+                                                               offsets       = self.offsets)
+
+            force = lj_force[:self.N] + self.force_from_wall
 
             #Calculate the displace vector
             self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
@@ -365,11 +396,45 @@ class Universe(base):
         elif any(self.external_forces) and self.hydrodynamics:
 
             #Calculate forces between particles
-            F = self.dt * (self.lennard_jones() + self.force_per_particle_from_domains) / self.RT
+            lj_force, self.pp_pairlist, self.Dij = self.lennard_jones(frame           = self.frame,
+                                                                      nstlist         = self.lj_nstlist,
+                                                                      ref_pos         = w_universe_domains,
+                                                                      conf_pos        = w_universe_domains,
+                                                                      pbc_dim         = self.pbc_dim,
+                                                                      buffer_radius   = self.lj_buffer,
+                                                                      vdw_cutoff      = self.lj_cutoff,
+                                                                      pairlist        = self.pp_pairlist,
+                                                                      A12             = self.lj_A12,
+                                                                      B6              = self.lj_B6,
+                                                                      hydrodyn        = self.hydrodynamics,
+                                                                      cutoff_a        = self.cutoff_a,
+                                                                      cutoff_2a       = self.cutoff_2a,
+                                                                      viscosity_scale = self.viscosity_scale,
+                                                                      Dij             = self.Dij,
+                                                                      offsets         = self.offsets)
 
-            L = np.linalg.cholesky(self.Dij).astype(np.float32)
+
+            #Calculate forces between particles
+            F = self.dt * (lj_force[:self.N] + self.force_from_wall) / self.RT
+
+            """
+            F = self.dt * (lj_force + self.force_per_particle_from_domains + self.force_from_wall) / self.RT
+            nPart, nBound, _, _ = self.Dij_all_boundaries.shape
+
+            total_col_row = self.N + nBound
+
+            total_Dij = np.zeros( ( total_col_row, total_col_row, 2, 2 ), dtype = np.float32) 
+            total_Dij[:, :] = np.eye(2, 2)
+
+            total_Dij[ :self.N , :self.N , :, : ] = self.Dij 
+            total_Dij[  self.N:, :self.N , :, : ] = self.Dij_all_boundaries.reshape(nBound, nPart, 2, 2)
+            total_Dij[ :self.N ,  self.N:, :, : ] = self.Dij_all_boundaries
+            """
+
+            #L = np.linalg.cholesky(self.Dij) 
+            L = hydrodynamics.numba_cholesky(a = self.Dij).astype(np.float32)
             #Calculate the displace vector
-            R = hydrodynamics.get_R(L = L, N = self.N, dt = self.dt)
+            R = hydrodynamics.get_R(L = L, N = self.N_p_Domains, dt = self.dt)[:self.N]
 
             self.displace = F + R
 
@@ -668,65 +733,6 @@ class Universe(base):
 
                 else: raise ValueError("Currently I cannot handle the provided geometry.")
     
-    
-    def soft_boundaries(self):
-
-        """
-        Function to handle domains with soft boundaries.
-
-        """ 
-        
-        self.force_per_particle_from_domains = np.zeros( (self.N, 2), dtype = np.float32 )
-        
-        #If called but no geometry for a domain is stored
-        if not any(self.hard_boundaries_geometry) or self.hard_boundaries_geometry['Type'] == 'Hard': pass
-
-        else:
-
-            
-            #---------------------------------------------------------------------------------------
-            #Iterate over stored geometries
-            for key, geometry in self.hard_boundaries_geometry.items():
-
-                if key == "Type": continue
-
-                #Circular hard boundary
-                elif 'c' in key:
-                
-                    #--------------------------------------------------------------------------------
-                    #Calculate real distances
-                    mid        = self.hard_boundaries_geometry[key][0]
-                    r          = self.hard_boundaries_geometry[key][1]
-                    r_sq       = self.hard_boundaries_geometry[key][2]
-                    prev_index = self.hard_boundaries_geometry[key][3]
-                    diff_coeff = self.hard_boundaries_geometry[key][4]
-                    pairlist   = self.hard_boundaries_geometry[key][5]
-                    #--------------------------------------------------------------------------------
-
-                    #Generate new pair list
-                    if (self.frame % self.lj_nstlist) == 1 or self.lj_nstlist == 1:
-
-                        #The vectors pointing from particles to domains
-                        dist_mat, vec_mat = utils.distance_matrix_NxM(ref_pos = mid, conf_pos = self.w_universe, N = 1, M = self.N, pbc_dim = self.pbc_dim)
-                        rij_pairlist, rij_sq_pairlist, pairlist, _, _, _ = force.generate_pairlist(dist_mat = dist_mat, vec_mat = vec_mat, lj_buffer = (self.lj_buffer_org + r)**2)
-
-                        self.hard_boundaries_geometry[key][5] = pairlist
-
-                    else:
-                        
-                        #The vectors pointing from particles to domains
-                        rij_pairlist, rij_sq_pairlist = force.update_pairlist(ref_pos = mid, conf_pos = self.w_universe, pairlist = pairlist, pbc_dim = self.pbc_dim)
-
-
-                    rij, rij_sq, mask, _, _ = force.filter_pairlist(cutoff = (self.lj_cutoff_org + r)**2, rij = rij_pairlist, rij_sq = rij_sq_pairlist)
-                    
-                    rij_sq_real = (np.sqrt(rij_sq) - r)**2
-                    rij_real    = (rij_sq_real / rij_sq).reshape(-1, 1) * rij
-
-                    if self.hydrodynamics == True: self.force_per_particle_from_domains += force.calculate_hydro_force_from_domain(rij = rij_real, rij_sq = rij_sq_real, N = self.N, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, masked_pairlist = pairlist[mask], Dij = self.Dij)
-                    else: self.force_per_particle_from_domains += force.calculate_force_from_domain(rij = rij_real, rij_sq = rij_sq_real, N = self.N, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, masked_pairlist = pairlist[mask])
-
-                else: raise ValueError("Currently I cannot handle the provided geometry.")
 
     #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     #Analysis part

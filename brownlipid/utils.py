@@ -12,6 +12,15 @@ import matplotlib.pyplot as plt
 
 from numba import jit
 
+@jit(nopython=True)
+def apply_offset(rij, rij_, offset):
+
+    real_rij_ = (rij_ - offset)
+    real_rij    = (real_rij_ / rij_) * rij
+
+    return real_rij, real_rij_
+
+
 def heaviside(x, threshold):
 
     """
@@ -36,8 +45,8 @@ def heaviside(x, threshold):
     if x <= threshold: return 1
     else: return 0
 
-@jit(nopython=True)
-def distance_matrix_NxN(pos, N, pbc_dim):
+#@jit(nopython=True)
+def distance_matrix_NxN(pos, N, pbc_dim, offsets):
 
     """
     Calculate distance matrix between all possible pairs of particles.
@@ -80,7 +89,7 @@ def distance_matrix_NxN(pos, N, pbc_dim):
     for i in range(N - 1):
 
         #rij is the vector that points from (i+1) to i, or otherwise that points from j to i.
-        rij    = pos[i, :] - pos[(i+1):, :] 
+        rij    = pos[i, :] - pos[(i+1):, :]
 
         #Apply periodic boundary conditions
         for k, size in zip(pbc_dim[0], pbc_dim[1]):
@@ -89,11 +98,12 @@ def distance_matrix_NxN(pos, N, pbc_dim):
 
 
         #For the force calculation later only the squared distance is required, therefore the square root operation is omitted.
-        rij_sq = np.sum(rij**2,axis=1)
+        rij_       = np.sqrt( np.sum(rij**2,axis=1) )
+        rij_offset = rij_ - offsets[i, (i+1):]
 
         #Store the squared distances and distance vectors in the arrays
-        dist_mat[i, (i+1):]    = rij_sq
-        vec_mat[ i, (i+1):, :] = rij
+        dist_mat[i, (i+1):]    = rij_offset
+        vec_mat[ i, (i+1):, :] = ( rij_offset / rij_ ).reshape(-1, 1) * rij
 
     return dist_mat, vec_mat
 
@@ -143,9 +153,9 @@ def distance_matrix_NxM(ref_pos, conf_pos, N, M, pbc_dim):
 
 
     #For the force calculation later only the squared distance is required, therefore the square root operation is omitted.
-    rij_sq = np.sum(rij**2,axis=2)
+    rij_ = np.sqrt( np.sum(rij**2,axis=2) )
 
-    return rij_sq, rij
+    return rij_, rij
 
 @jit(nopython=True)
 def apply_pbc_vector(vec, pbc_dim) -> np.ndarray:
@@ -229,33 +239,24 @@ def apply_soft_wall_force(pos, hard_wall, lj_cutoff, lj_A12, lj_B6):
     for i, size in zip(hard_wall[0], hard_wall[1]):
         
         # Distances from walls
-        ri_lo = pos[:, i]
-        ri_up = size - ri_lo
+        ri = np.where(pos[:, i] > (size / 2), pos[:, i] - size, pos[:, i])
 
         # Squared distances
-        ri_sq_lo = ri_lo**2
-        ri_sq_up = ri_up**2
+        ri_sq = ri ** 2
 
         # Mask for particles within cutoff
-        lj_mask = (ri_sq_lo <= lj_cutoff) | (ri_sq_up <= lj_cutoff)
+        lj_mask = (ri_sq <= lj_cutoff)
 
         if not np.any(lj_mask): continue
 
-        # Select minimum squared distance
-        ri_sq = np.minimum(ri_sq_lo[lj_mask], ri_sq_up[lj_mask])
-
-        # Prevent division by zero
-        inv_ri_sq = 1.0 / ri_sq
-
         # Lennard-Jones force calculation
+        inv_ri_sq = 1.0 / ri_sq[lj_mask]
+        
         sr6 = inv_ri_sq ** 3
         sr12 = sr6 ** 2
         force = (lj_A12 * sr12 - lj_B6 * sr6) * inv_ri_sq
 
-        # Determine force direction
-        force_direction = np.where(ri_sq_lo[lj_mask] <= ri_sq_up[lj_mask], ri_lo[lj_mask], -ri_up[lj_mask])
-
-        force_from_wall[lj_mask, i] += force * force_direction
+        force_from_wall[lj_mask, i] += force * ri[lj_mask]
 
     return force_from_wall
 
@@ -275,35 +276,27 @@ def apply_soft_wall_force_hydro(pos, hard_wall, lj_cutoff, lj_A12, lj_B6, Dij, N
     if not hard_wall[0]: return force_from_wall
 
     for i, size in zip(hard_wall[0], hard_wall[1]):
-        
+
         # Distances from walls
-        ri_lo = pos[:, i]
-        ri_up = size - ri_lo
+        ri = np.where(pos[:, i] > (size / 2), pos[:, i] - size, pos[:, i])
 
         # Squared distances
-        ri_sq_lo = ri_lo**2
-        ri_sq_up = ri_up**2
+        ri_sq = ri ** 2
 
         # Mask for particles within cutoff
-        lj_mask = (ri_sq_lo <= lj_cutoff) | (ri_sq_up <= lj_cutoff)
+        lj_mask = (ri_sq <= lj_cutoff)
 
         if not np.any(lj_mask): continue
 
-        # Select minimum squared distance
-        ri_sq = np.minimum(ri_sq_lo[lj_mask], ri_sq_up[lj_mask])
-
-        # Prevent division by zero
-        inv_ri_sq = 1.0 / ri_sq
-
         # Lennard-Jones force calculation
+        inv_ri_sq = 1.0 / ri_sq[lj_mask]
+        
         sr6 = inv_ri_sq ** 3
         sr12 = sr6 ** 2
         force = (lj_A12 * sr12 - lj_B6 * sr6) * inv_ri_sq
 
-        # Determine force direction
-        force_direction = np.where(ri_sq_lo[lj_mask] <= ri_sq_up[lj_mask], ri_lo[lj_mask], -ri_up[lj_mask])
-
-        force_from_wall[lj_mask, i] += force * force_direction
+        force_from_wall[lj_mask, i] += force * ri[lj_mask]
+        
 
     for i in range(N): force_from_wall[i] = np.array([ np.sum(Dij[i,i][0] * force_from_wall[i]), np.sum(Dij[i,i][1] * force_from_wall[i]) ], dtype = np.float32 )
 
@@ -524,7 +517,7 @@ def distribute_domains_random_same_radius(number, r, size_x, size_y, pbc_dim, ou
     attempts     = 0
     max_attempts = 10000000
 
-    r_buffer = r + 0.75
+    r_buffer = r + 0.4
 
     number_placed = 0
     while number_placed < number:
@@ -544,7 +537,7 @@ def distribute_domains_random_same_radius(number, r, size_x, size_y, pbc_dim, ou
 
         d = np.linalg.norm(d, axis = 1)
 
-        if np.all( d > r_buffer): 
+        if np.all( d > 2 * r_buffer): 
             placed_ = np.vstack((placed_, xy))
             number_placed += 1
 

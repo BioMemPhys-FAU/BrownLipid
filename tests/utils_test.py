@@ -18,11 +18,11 @@ def test_heaviside(x, threshold):
 #------------------------------------------------------------
 L    = 4.1
 N    = 2
-pos  = np.array([[1, 1], [3, 3]])
+pos  = np.array([[1, 1], [3, 3]], dtype = np.float32)
 dist = np.sum( (pos[0] - pos[1])**2 )
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([0,1], [L, L])
 
@@ -34,10 +34,10 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 #------------------------------------------------------------
 L    = 10.
 N    = 2
-pos  = np.array([[1, 5], [9, 5]])
+pos  = np.array([[1, 5], [9, 5]], dtype = np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([0,1], [L, L])
 dist_mat[0, 1] = 2**2
@@ -48,10 +48,10 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 #------------------------------------------------------------
 L    = 10.
 N    = 2
-pos  = np.array([[1, 5], [9, 5]])
+pos  = np.array([[1, 5], [9, 5]], dtype = np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([1], [L])
 dist_mat[0, 1] = 8**2
@@ -62,10 +62,10 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 #------------------------------------------------------------
 L    = 10.
 N    = 2
-pos  = np.array([[4, 1], [4, 9]])
+pos  = np.array([[4, 1], [4, 9]], dtype = np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([0,1], [L, L])
 dist_mat[0, 1] = 2**2
@@ -76,10 +76,10 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 #------------------------------------------------------------
 L    = 10.
 N    = 2
-pos  = np.array([[4, 1], [4, 9]])
+pos  = np.array([[4, 1], [4, 9]], dtype = np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([0], [L])
 dist_mat[0, 1] = 8**2
@@ -90,16 +90,16 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 #------------------------------------------------------------
 L    = 100000.
 N    = 1000
-pos  = 500 * np.random.rand(N, 2)
+pos  = 500 * np.random.rand(N, 2).astype(np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([0, 1], [L, L])
 
 for i in range(N):
     for j in range(i+1, N):
-        vec_mat[i,j] = pos[i] - pos[j]
+        vec_mat[i,j] = (pos[i] - pos[j]).astype(np.float32)
         dist_mat[i,j] = np.sum(vec_mat[i,j]**2)
 
 test6 = (pos, N, pbc_dim, dist_mat, vec_mat )
@@ -108,16 +108,16 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 #------------------------------------------------------------
 L    = 500.
 N    = 1000
-pos  = 500 * np.random.rand(N, 2)
+pos  = 500 * np.random.rand(N, 2).astype(np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.nan
-vec_mat  = np.ones( (N, N, 2) ) * np.nan
+dist_mat = np.ones( (N, N) )    * np.inf
+vec_mat  = np.ones( (N, N, 2) ) * np.inf
 
 pbc_dim = ([0, 1], [L, L])
 
 for i in range(N):
     for j in range(i+1, N):
-        vec_mat[i,j] = pos[i] - pos[j]
+        vec_mat[i,j] = (pos[i] - pos[j]).astype(np.float32)
 
         vec_mat[i,j] = utils.apply_pbc_vector(vec = vec_mat[i,j].reshape(1, 2), pbc_dim = pbc_dim)
 
@@ -130,10 +130,10 @@ del pos, N, pbc_dim, dist_mat, vec_mat
 @pytest.mark.parametrize("pos, N, pbc_dim, dist_true, vec_true", [test1, test2, test3, test4, test5, test6, test7])
 def test_distance_matrix(pos, N, pbc_dim, dist_true, vec_true):
 
-    dist_out, vec_out = utils.distance_matrix_NxN(pos, N, pbc_dim)
+    dist_out, vec_out = utils.distance_matrix_NxN(pos, N, pbc_dim, np.zeros((N,N), dtype = np.float32))
 
-    np.testing.assert_allclose(dist_out, dist_true)
-    np.testing.assert_allclose(vec_out, vec_true)
+    np.testing.assert_allclose(dist_out, np.sqrt(dist_true).astype(np.float32), atol=1E-4, rtol=0)
+    np.testing.assert_allclose(vec_out.astype(np.float32), vec_true.astype(np.float32), atol=1E-4, rtol=0)
 
 test1=( np.array([[ 1  , 2  ]]), ([0, 1],[5, 5]), np.array([[1,    2]]) )
 test2=( np.array([[ 1  , 2  ]]), ([0, 1],[5, 3]), np.array([[1,   -1]]) )
