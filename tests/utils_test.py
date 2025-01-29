@@ -19,10 +19,10 @@ def test_heaviside(x, threshold):
 L    = 4.1
 N    = 2
 pos  = np.array([[1, 1], [3, 3]], dtype = np.float32)
-dist = np.sum( (pos[0] - pos[1])**2 )
+dist = np.sum( (pos[0] - pos[1])**2 ).astype(np.float32)
 
-dist_mat = np.ones( (N, N) )    * np.inf
-vec_mat  = np.ones( (N, N, 2) ) * np.inf
+dist_mat = np.ones( (N, N), dtype = np.float32 )    * np.inf
+vec_mat  = np.ones( (N, N, 2), dtype = np.float32 ) * np.inf
 
 pbc_dim = ([0,1], [L, L])
 

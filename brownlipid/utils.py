@@ -10,7 +10,7 @@ This module contains a bunch of helper functions that are used in multiple steps
 import numpy as np
 import matplotlib.pyplot as plt
 
-from numba import jit
+from numba import jit,prange
 
 @jit(nopython=True)
 def apply_offset(rij, rij_, offset):
@@ -45,7 +45,7 @@ def heaviside(x, threshold):
     if x <= threshold: return 1
     else: return 0
 
-#@jit(nopython=True)
+@jit(nopython=True)#, parallel=True)
 def distance_matrix_NxN(pos, N, pbc_dim, offsets):
 
     """
