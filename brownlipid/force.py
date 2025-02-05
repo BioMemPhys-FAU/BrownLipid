@@ -26,6 +26,154 @@ def pressure(NRT, Vir, area):
 
     return p
 
+def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets):
+
+    """
+    Compute the Lennard-Jones forces acting on each particle in the system.
+
+    This function calculates inter-particle forces based on the Lennard-Jones potential, using a pairlist
+    to optimize performance. The pairlist is either generated or updated depending on the current simulation frame.
+
+    Functions Called:
+    -----------------
+    1. `force.generate_pairlist`:
+       - Generates the pairlist, which contains pairs of particles within the cutoff distance,
+         considering periodic boundary conditions (PBC).
+    2. `force.update_pairlist`:
+       - Updates the existing pairlist for subsequent frames, ensuring pairs within the cutoff distance are maintained.
+    3. `force.calculate_force`:
+       - Computes the Lennard-Jones forces for all particle pairs in the pairlist based on their distances.
+
+    Returns:
+    --------
+    force_per_particle : numpy.ndarray
+        A (N, 2) array representing the forces acting on each particle in the system.
+    """
+    
+    #Generate new pair list
+    if (frame % nstlist) == 1 or nstlist == 1: 
+        
+        #Calculate distances and distance vectors for all unique pairs of particles -> COSTLY
+        dist_mat, vec_mat = utils.distance_matrix_NxN(pos = conf_pos, N = conf_pos.shape[0], pbc_dim = pbc_dim, offsets = offsets)
+
+        #### BUFFER RADIUS
+        #Pairlist       -> Contains everything that is inside the buffer radius of a particle
+        pairlist_rij, pairlist_rij_sqrt, pairlist, _, _, _ = force.generate_pairlist(dist_mat= dist_mat, vec_mat = vec_mat, lj_buffer = buffer_radius)
+
+    #Update distances in the self.pairlist
+    else: 
+
+        #### BUFFER RADIUS
+        #Update pairlist -> Update every distance and distance vector inside the buffer radius of a particle
+        pairlist_rij, pairlist_rij_sqrt = force.update_pairlist(ref_pos   = ref_pos, conf_pos  = conf_pos, pairlist  = pairlist, pbc_dim   = pbc_dim, offsets   = offsets[ pairlist[:, 0], pairlist[:, 1] ])
+    
+    #### INNER RADIUS
+    #Obtain effective distances and distance vectors that are taking into account for the LJ interaction between particles
+    effective_rij, effective_rij_sqrt, effective_mask, _, _ = force.filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+    
+
+    if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, 0, 0
+    assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
+    
+    force_per_particle, virial, pote = force.calculate_force(rij             = effective_rij,
+                                                             rij_sq          = effective_rij_sqrt**2,
+                                                             N               = ref_pos.shape[0],
+                                                             lj_A12          = A12,
+                                                             lj_B6           = B6,
+                                                             masked_pairlist = pairlist[ effective_mask ])
+ 
+
+    return force_per_particle, pairlist, virial, pote
+
+def lennard_jones_hydro(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets, hydrodyn = False, cutoff_a = 0, cutoff_2a = 0, viscosity_scale = 0, Dij = 0):
+
+    """
+    Compute the Lennard-Jones forces acting on each particle in the system.
+
+    This function calculates inter-particle forces based on the Lennard-Jones potential, using a pairlist
+    to optimize performance. The pairlist is either generated or updated depending on the current simulation frame.
+
+    Functions Called:
+    -----------------
+    1. `force.generate_pairlist`:
+       - Generates the pairlist, which contains pairs of particles within the cutoff distance,
+         considering periodic boundary conditions (PBC).
+    2. `force.update_pairlist`:
+       - Updates the existing pairlist for subsequent frames, ensuring pairs within the cutoff distance are maintained.
+    3. `force.calculate_force`:
+       - Computes the Lennard-Jones forces for all particle pairs in the pairlist based on their distances.
+
+    Returns:
+    --------
+    force_per_particle : numpy.ndarray
+        A (N, 2) array representing the forces acting on each particle in the system.
+    """
+    
+    #Generate new pair list
+    if (frame % nstlist) == 1 or nstlist == 1: 
+        
+        #Calculate distances and distance vectors for all unique pairs of particles -> COSTLY
+        dist_mat, vec_mat = utils.distance_matrix_NxN(pos = conf_pos, N = conf_pos.shape[0], pbc_dim = pbc_dim, offsets = offsets)
+
+        #### BUFFER RADIUS
+        #Pairlist       -> Contains everything that is inside the buffer radius of a particle
+        #Outer Pairlist -> Contains everything that is outside the buffer radius of a particle
+        pairlist_rij, pairlist_rij_sqrt, pairlist, outer_pairlist_rij, outer_pairlist_rij_sqrt, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat, vec_mat   = vec_mat, lj_buffer = buffer_radius)
+
+        #Hydrodynamics requested
+        #Calculate Diffusion coefficients between particles outside the buffer radius
+
+        #Update diffusion coefficients larger than buffer radius
+        rpy_far        = hydrodynamics.rpy_far(rij_sq = outer_pairlist_rij_sqrt, rij = outer_pairlist_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
+
+        Dij[outer_pairlist[:, 0], outer_pairlist[:, 1]] = rpy_far
+        Dij[outer_pairlist[:, 1], outer_pairlist[:, 0]] = rpy_far
+
+    #Update distances in the self.pairlist
+    else: 
+
+        #Update pairlist -> Update every distance and distance vector inside the buffer radius of a particle
+        pairlist_rij, pairlist_rij_sqrt = force.update_pairlist(ref_pos   = ref_pos,
+                                                                conf_pos  = conf_pos,
+                                                                pairlist  = pairlist,
+                                                                pbc_dim   = pbc_dim,
+                                                                offsets   = offsets[ pairlist[:, 0], pairlist[:, 1] ])
+    
+    #### INNER RADIUS
+    #Obtain effective distances and distance vectors that are taking into account for the LJ interaction between particles
+    effective_rij, effective_rij_sqrt, effective_mask, _, _ = force.filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+    
+
+    #Hydrodynamics requested
+    near_rij, near_rij_sqrt, near_mask, far_rij, far_rij_sqrt = force.filter_pairlist(cutoff = cutoff_2a, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+
+    #NEAR FIELD DIFFUSION
+    rpy_near        = hydrodynamics.rpy_near(rij_sq = near_rij_sqrt, rij = near_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
+    
+    Dij[ pairlist[ near_mask, 0], pairlist[ near_mask, 1]] = rpy_near
+    Dij[ pairlist[ near_mask, 1], pairlist[ near_mask, 0]] = rpy_near
+    
+    #FAR FIELD DIFFUSION
+    rpy_far        = hydrodynamics.rpy_far(rij_sq = far_rij_sqrt, rij = far_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
+
+    Dij[ pairlist[ ~near_mask, 0], pairlist[ ~near_mask, 1]] = rpy_far
+    Dij[ pairlist[ ~near_mask, 1], pairlist[ ~near_mask, 0]] = rpy_far
+
+    #-----------------------------------------------------------------------------
+    
+    if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
+    assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
+
+    force_per_particle = force.calculate_hydro_force(rij             = effective_rij,
+                                                     rij_sq          = effective_rij_sqrt**2,
+                                                     N               = ref_pos.shape[0],
+                                                     lj_A12          = A12,
+                                                     lj_B6           = B6,
+                                                     masked_pairlist = pairlist[ effective_mask ], 
+                                                     Dij             = Dij)
+
+    return force_per_particle, pairlist, Dij
+
 @jit(nopython=True)
 def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
 
@@ -64,14 +212,20 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
     sr6        = inv_rij_sq ** 3
     sr12       = sr6 ** 2
 
+    sr6       *= lj_B6
+    sr12      *= lj_A12
+
+    #Calculate potential energy
+    pote       = (sr12 / 2 - sr6 ) / 6
+
     #Calculate the virial
-    virial = (lj_A12 * sr12 - lj_B6 * sr6 )
+    virial     = (sr12 - sr6 )
 
     #Calculate "scaling factor" for the force
-    force  = virial * inv_rij_sq
+    force      = virial * inv_rij_sq
 
     #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
-    force  = force.reshape(-1, 1) * rij
+    force      = force.reshape(-1, 1) * rij
 
     #Storage factor for the force per particle
     force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
@@ -89,7 +243,7 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
 
         k += 1
 
-    return force_per_particle, virial.sum()
+    return force_per_particle, virial.sum(), pote.sum()
 
 @jit(nopython=True)
 def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
@@ -129,15 +283,20 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
     sr6        = inv_rij_sq ** 3
     sr12       = sr6 ** 2
 
+    sr6       *= lj_B6
+    sr12      *= lj_A12
+
+    #Calculate potential energy
+    pote       = (sr12 / 2 - sr6 ) / 6
+
     #Calculate the virial
-    virial = (lj_A12 * sr12 - lj_B6 * sr6 )
+    virial     = (sr12 - sr6 )
 
     #Calculate "scaling factor" for the force
-    force  = virial * inv_rij_sq
-    
+    force      = virial * inv_rij_sq
+
     #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
-    force = force.reshape(-1, 1) * rij
-    force = force.astype(np.float32)
+    force      = force.reshape(-1, 1) * rij
 
     #Storage factor for the force per particle
     force_per_particle = np.zeros( (N, 2), dtype = np.float32 )

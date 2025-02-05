@@ -62,8 +62,10 @@ class Universe(base):
         u_storage  = np.zeros( ( nstchk_frames + 1, self.N, 2 ), dtype = np.float32 )
 
         #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
-        time_array = np.zeros(  nstchk_frames + 1, dtype = np.float32 )
-        f_inside = np.zeros(  (nstchk_frames + 1, self.N), dtype = np.float32 )
+        time_array = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        f_inside   = np.zeros(  (nstchk_frames + 1, self.N), dtype = np.float32 )
+        potEnergy  = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        Virial     = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
         
         #Store initial frame
         w_storage[0] = self.w_universe
@@ -90,32 +92,21 @@ class Universe(base):
 
             self.frame = i
             
+            #Calculate forces from softwall bouncing (if applicable)
             if self.softwall == True and len(self.pbc_dim[0]) < 2:
 
-                if self.hydrodynamics == True: 
-                    self.force_from_wall = utils.apply_soft_wall_force_hydro(pos       = self.w_universe,
-                                                                             hard_wall = self.hard_wall,
-                                                                             lj_cutoff = self.lj_cutoff,
-                                                                             lj_A12    = self.lj_A12,
-                                                                             lj_B6     = self.lj_B6,
-                                                                             Dij       = self.Dij,
-                                                                             N         = self.N)
-
+                if self.hydrodynamics == True: self.force_from_wall = utils.apply_soft_wall_force_hydro(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, Dij= self.Dij, N = self.N)
                 else: self.force_from_wall = utils.apply_soft_wall_force(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6)
             
-            #Apply soft boundaries
-            #self.soft_boundaries()
-            #self.soft_boundaries_fast()
-
             #Move particles in time
             self.forward_in_time()
             
-            #Apply hard wall boundary conditions
-            if self.bounce_scale == None and len(self.pbc_dim[0]) < 2 and self.softwall == False: self.w_universe = self.apply_hard_wall(pos = self.w_universe) 
+            #Apply hard wall boundary conditions (if applicable)
+            if   self.bounce_scale == None and len(self.pbc_dim[0]) < 2 and self.softwall == False: self.w_universe = self.apply_hard_wall(pos = self.w_universe) 
             elif self.bounce_scale != None and len(self.pbc_dim[0]) < 2 and self.softwall == False: self.w_universe = utils.apply_hard_wall_scale(pos = self.w_universe, d = self.displace, hard_wall = self.hard_wall, bounce_scale = self.bounce_scale)
             else: pass
             
-            #Apply hard boundaries
+            #Apply hard boundaries (if applicable)
             self.hard_boundaries()
             
             #Apply periodic boundary conditions
@@ -125,8 +116,7 @@ class Universe(base):
             #Store particle positions
 
             #Unwrap self.w_universe and store the positions in self.u_universe
-            for j, size in enumerate([self.size_x, self.size_y]):
-                self.u_universe[:, j] = self.w_universe[:, j] - np.floor( (self.w_universe[:, j] - self.u_universe[:, j]) / size + 0.5 ) * size
+            for j, size in enumerate([self.size_x, self.size_y]): self.u_universe[:, j] = self.w_universe[:, j] - np.floor( (self.w_universe[:, j] - self.u_universe[:, j]) / size + 0.5 ) * size
 
             #Write current state of the universe into storage arrays
             if not i % self.nstxout: 
@@ -140,12 +130,15 @@ class Universe(base):
                 #Current frame index in the current checkpoint file
                 chk_frame_index = ( ( (i-1) // self.nstxout) % nstchk_frames ) + utils.heaviside(x = i, threshold = self.nstchk)
                 
-                w_storage[ chk_frame_index, :, : ] = self.w_universe
-                u_storage[ chk_frame_index, :, : ] = self.u_universe
+                w_storage[  chk_frame_index, :, : ] = self.w_universe
+                u_storage[  chk_frame_index, :, : ] = self.u_universe
                 
                 time_array[ chk_frame_index ] = time
 
-                f_inside[ chk_frame_index ] = self.in_domains 
+                f_inside[   chk_frame_index ] = self.in_domains 
+
+                potEnergy[  chk_frame_index ] = self.pote
+                Virial[     chk_frame_index ] = self.virial
 
                 #If check pointing is requested then write current storage arrays to disk and renew them
                 if not i % self.nstchk:
@@ -154,21 +147,27 @@ class Universe(base):
                     chk_number = str(i // self.nstchk)
 
                     #Write arrays to disk
-                    np.save( arr = w_storage,  file = self.output +   f"_wrap.{chk_number.zfill(5)}" )
-                    np.save( arr = u_storage,  file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
+                    np.save( arr = w_storage , file = self.output +   f"_wrap.{chk_number.zfill(5)}" )
+                    np.save( arr = u_storage , file = self.output + f"_unwrap.{chk_number.zfill(5)}" )
                     
                     np.save( arr = time_array, file = self.output +   f"_time.{chk_number.zfill(5)}" )
                     
-                    np.save( arr = f_inside, file = self.output +   f"_f_inside.{chk_number.zfill(5)}" )
+                    np.save( arr = f_inside  , file = self.output +   f"_f_inside.{chk_number.zfill(5)}" )
+
+                    np.save( arr = potEnergy , file = self.output +   f"_potE.{chk_number.zfill(5)}" ) 
+                    np.save( arr = Virial    , file = self.output +   f"_Virial.{chk_number.zfill(5)}" ) 
         
                     #Setup storage for positions -> Shape: (Number of frames in checkpoint file, Number of Particles, Number of dimensions)
                     w_storage  = np.zeros( ( nstchk_frames, self.N, 2 ), dtype = np.float32 )
                     u_storage  = np.zeros( ( nstchk_frames, self.N, 2 ), dtype = np.float32 )
 
                     #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
-                    time_array = np.zeros(  nstchk_frames, dtype = np.float32 )
+                    time_array = np.zeros( nstchk_frames         , dtype = np.float32 )
                     
                     f_inside = np.zeros(  (nstchk_frames, self.N), dtype = np.float32 )
+        
+                    potEnergy  = np.zeros( nstchk_frames         , dtype = np.float32 )
+                    Virial     = np.zeros( nstchk_frames         , dtype = np.float32 )
     
         self.last_frame = np.copy(self.w_universe)
         print("Your simulation terminated successfully!")
@@ -237,118 +236,7 @@ class Universe(base):
         return init_pos
 
     #--------------------------------------------------------------------------------------------------------------
-    
-    @staticmethod
-    def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets, hydrodyn = False, cutoff_a = 0, cutoff_2a = 0, viscosity_scale = 0, Dij = 0):
 
-        """
-        Compute the Lennard-Jones forces acting on each particle in the system.
-
-        This function calculates inter-particle forces based on the Lennard-Jones potential, using a pairlist
-        to optimize performance. The pairlist is either generated or updated depending on the current simulation frame.
-
-        Functions Called:
-        -----------------
-        1. `force.generate_pairlist`:
-           - Generates the pairlist, which contains pairs of particles within the cutoff distance,
-             considering periodic boundary conditions (PBC).
-        2. `force.update_pairlist`:
-           - Updates the existing pairlist for subsequent frames, ensuring pairs within the cutoff distance are maintained.
-        3. `force.calculate_force`:
-           - Computes the Lennard-Jones forces for all particle pairs in the pairlist based on their distances.
-
-        Returns:
-        --------
-        force_per_particle : numpy.ndarray
-            A (N, 2) array representing the forces acting on each particle in the system.
-        """
-        
-        #Generate new pair list
-        if (frame % nstlist) == 1 or nstlist == 1: 
-            
-            #Calculate distances and distance vectors for all unique pairs of particles -> COSTLY
-            dist_mat, vec_mat = utils.distance_matrix_NxN(pos     = conf_pos,
-                                                          N       = conf_pos.shape[0],
-                                                          pbc_dim = pbc_dim,
-                                                          offsets = offsets)
-
-            #### BUFFER RADIUS
-            #Pairlist       -> Contains everything that is inside the buffer radius of a particle
-            #Outer Pairlist -> Contains everything that is outside the buffer radius of a particle
-            pairlist_rij, pairlist_rij_sqrt, pairlist, outer_pairlist_rij, outer_pairlist_rij_sqrt, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat,
-                                                                                                                                            vec_mat   = vec_mat,
-                                                                                                                                            lj_buffer = buffer_radius)
-
-            if hydrodyn == True:
-
-                #Hydrodynamics requested
-                #Calculate Diffusion coefficients between particles outside the buffer radius
-        
-                #Update diffusion coefficients larger than buffer radius
-                rpy_far        = hydrodynamics.rpy_far(rij_sq = outer_pairlist_rij_sqrt, rij = outer_pairlist_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
-
-                Dij[outer_pairlist[:, 0], outer_pairlist[:, 1]] = rpy_far
-                Dij[outer_pairlist[:, 1], outer_pairlist[:, 0]] = rpy_far
-
-        #Update distances in the self.pairlist
-        else: 
-
-            #Update pairlist -> Update every distance and distance vector inside the buffer radius of a particle
-            pairlist_rij, pairlist_rij_sqrt = force.update_pairlist(ref_pos   = ref_pos,
-                                                                    conf_pos  = conf_pos,
-                                                                    pairlist  = pairlist,
-                                                                    pbc_dim   = pbc_dim,
-                                                                    offsets   = offsets[ pairlist[:, 0], pairlist[:, 1] ])
-        
-        #### INNER RADIUS
-        #Obtain effective distances and distance vectors that are taking into account for the LJ interaction between particles
-        effective_rij, effective_rij_sqrt, effective_mask, _, _ = force.filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
-        
-        if hydrodyn == True:
-
-            #Hydrodynamics requested
-            near_rij, near_rij_sqrt, near_mask, far_rij, far_rij_sqrt = force.filter_pairlist(cutoff = cutoff_2a, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
-        
-            #NEAR FIELD DIFFUSION
-            rpy_near        = hydrodynamics.rpy_near(rij_sq = near_rij_sqrt, rij = near_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
-            
-            Dij[ pairlist[ near_mask, 0], pairlist[ near_mask, 1]] = rpy_near
-            Dij[ pairlist[ near_mask, 1], pairlist[ near_mask, 0]] = rpy_near
-            
-            #FAR FIELD DIFFUSION
-            rpy_far        = hydrodynamics.rpy_far(rij_sq = far_rij_sqrt, rij = far_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
-
-            Dij[ pairlist[ ~near_mask, 0], pairlist[ ~near_mask, 1]] = rpy_far
-            Dij[ pairlist[ ~near_mask, 1], pairlist[ ~near_mask, 0]] = rpy_far
-
-            #-----------------------------------------------------------------------------
-            
-            if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
-            assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
-        
-            force_per_particle = force.calculate_hydro_force(rij             = effective_rij,
-                                                             rij_sq          = effective_rij_sqrt**2,
-                                                             N               = ref_pos.shape[0],
-                                                             lj_A12          = A12,
-                                                             lj_B6           = B6,
-                                                             masked_pairlist = pairlist[ effective_mask ], 
-                                                             Dij             = Dij)
-
-        else:
-
-            if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
-            assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
-            
-            force_per_particle, virial = force.calculate_force(rij             = effective_rij,
-                                                               rij_sq          = effective_rij_sqrt**2,
-                                                               N               = ref_pos.shape[0],
-                                                               lj_A12          = A12,
-                                                               lj_B6           = B6,
-                                                               masked_pairlist = pairlist[ effective_mask ])
-     
-
-        return force_per_particle, pairlist, Dij
-    
     def forward_in_time(self):
 
         """
@@ -366,7 +254,7 @@ class Universe(base):
         
         w_universe_domains = np.vstack((self.w_universe, self.domain_coords))
 
-
+        #LJ + RANDOM (no hydrodynamics)
         if any(self.external_forces) and not self.hydrodynamics:
         
             diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
@@ -375,24 +263,25 @@ class Universe(base):
             factor = np.sqrt( 2 * diff_dt )
 
             #Calculate forces between particles
-            lj_force, self.pp_pairlist, _ = self.lennard_jones(frame         = self.frame,
-                                                               nstlist       = self.lj_nstlist,
-                                                               ref_pos       = w_universe_domains,
-                                                               conf_pos      = w_universe_domains,
-                                                               pbc_dim       = self.pbc_dim,
-                                                               buffer_radius = self.lj_buffer,
-                                                               vdw_cutoff    = self.lj_cutoff,
-                                                               pairlist      = self.pp_pairlist,
-                                                               A12           = self.lj_A12,
-                                                               B6            = self.lj_B6,
-                                                               hydrodyn      = self.hydrodynamics,
-                                                               offsets       = self.offsets)
+            lj_force, self.pp_pairlist, self.virial, self.pote = force.lennard_jones(frame         = self.frame,
+                                                                                     nstlist       = self.lj_nstlist,
+                                                                                     ref_pos       = w_universe_domains,
+                                                                                     conf_pos      = w_universe_domains,
+                                                                                     pbc_dim       = self.pbc_dim,
+                                                                                     buffer_radius = self.lj_buffer,
+                                                                                     vdw_cutoff    = self.lj_cutoff,
+                                                                                     pairlist      = self.pp_pairlist,
+                                                                                     A12           = self.lj_A12,
+                                                                                     B6            = self.lj_B6,
+                                                                                     hydrodyn      = self.hydrodynamics,
+                                                                                     offsets       = self.offsets)
 
             force = lj_force[:self.N] + self.force_from_wall
 
             #Calculate the displace vector
             self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
 
+        #HYDRODYNAMICS_LJ + RANDOM
         elif any(self.external_forces) and self.hydrodynamics:
 
             #Calculate forces between particles
@@ -417,27 +306,14 @@ class Universe(base):
             #Calculate forces between particles
             F = self.dt * (lj_force[:self.N] + self.force_from_wall) / self.RT
 
-            """
-            F = self.dt * (lj_force + self.force_per_particle_from_domains + self.force_from_wall) / self.RT
-            nPart, nBound, _, _ = self.Dij_all_boundaries.shape
-
-            total_col_row = self.N + nBound
-
-            total_Dij = np.zeros( ( total_col_row, total_col_row, 2, 2 ), dtype = np.float32) 
-            total_Dij[:, :] = np.eye(2, 2)
-
-            total_Dij[ :self.N , :self.N , :, : ] = self.Dij 
-            total_Dij[  self.N:, :self.N , :, : ] = self.Dij_all_boundaries.reshape(nBound, nPart, 2, 2)
-            total_Dij[ :self.N ,  self.N:, :, : ] = self.Dij_all_boundaries
-            """
-
             #L = np.linalg.cholesky(self.Dij) 
             L = hydrodynamics.numba_cholesky(a = self.Dij).astype(np.float32)
             #Calculate the displace vector
             R = hydrodynamics.get_R(L = L, N = self.N_p_Domains, dt = self.dt)[:self.N]
 
             self.displace = F + R
-
+        
+        #RANDOM
         else:
 
             diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
