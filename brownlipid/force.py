@@ -18,6 +18,14 @@ from . import utils
 import numpy as np
 from numba import jit
 
+@jit(nopython = True)
+def pressure(NRT, Vir, area):
+
+    p = ((NRT - Vir / 2) / area)
+    p *= (100/NA) #Richtige Skalierung
+
+    return p
+
 @jit(nopython=True)
 def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
 
@@ -56,11 +64,14 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
     sr6        = inv_rij_sq ** 3
     sr12       = sr6 ** 2
 
+    #Calculate the virial
+    virial = (lj_A12 * sr12 - lj_B6 * sr6 )
+
     #Calculate "scaling factor" for the force
-    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
+    force  = virial * inv_rij_sq
 
     #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
-    force = force.reshape(-1, 1) * rij
+    force  = force.reshape(-1, 1) * rij
 
     #Storage factor for the force per particle
     force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
@@ -78,7 +89,7 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
 
         k += 1
 
-    return force_per_particle
+    return force_per_particle, virial.sum()
 
 @jit(nopython=True)
 def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
@@ -118,8 +129,11 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
     sr6        = inv_rij_sq ** 3
     sr12       = sr6 ** 2
 
+    #Calculate the virial
+    virial = (lj_A12 * sr12 - lj_B6 * sr6 )
+
     #Calculate "scaling factor" for the force
-    force = (lj_A12 * sr12 - lj_B6 * sr6 ) * inv_rij_sq
+    force  = virial * inv_rij_sq
     
     #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
     force = force.reshape(-1, 1) * rij

@@ -339,12 +339,12 @@ class Universe(base):
             if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
             assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
             
-            force_per_particle = force.calculate_force(rij             = effective_rij,
-                                                       rij_sq          = effective_rij_sqrt**2,
-                                                       N               = ref_pos.shape[0],
-                                                       lj_A12          = A12,
-                                                       lj_B6           = B6,
-                                                       masked_pairlist = pairlist[ effective_mask ])
+            force_per_particle, virial = force.calculate_force(rij             = effective_rij,
+                                                               rij_sq          = effective_rij_sqrt**2,
+                                                               N               = ref_pos.shape[0],
+                                                               lj_A12          = A12,
+                                                               lj_B6           = B6,
+                                                               masked_pairlist = pairlist[ effective_mask ])
      
 
         return force_per_particle, pairlist, Dij
@@ -736,63 +736,87 @@ class Universe(base):
 
     #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     #Analysis part
-
-    def load_data_unwrap(self):
+    def load_data_unwrap(self, block = None, skip = 1):
 
         try:
-            if self.u_storage.shape[0] == self.nsteps // self.nstxout: return 0
+            if self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
         except: pass
+
+        if type(block) == type(None): block = np.arange( self.N )
         
-        self.u_storage  = np.zeros( (0, self.N, 2), dtype = np.float32 )
-        self.time_array = np.zeros( (0)                   , dtype = np.float32 )
+        self.u_storage  = np.zeros( (0, len(block), 2), dtype = np.float32 )
+        self.time_array = np.zeros( (0)               , dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
 
             chk_number = str(chk_number)
 
-            self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy") ))
+            if chk_number == "1":
 
-            self.time_array = np.append( self.time_array, np.load(self.output +   f"_time.{chk_number.zfill(5)}.npy")  ) 
+                self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")[::skip, block, :] ))
+                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")[::skip] ) 
+
+            else:
+
+                data = np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")
+                time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
+
+                start_idx = np.where( (time * self.dt) % skip == 0 )[0][0]
+
+                self.u_storage  = np.vstack( (self.u_storage, data[start_idx::skip, block, :] ))
+                self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
+
 
         #Validation
-        assert self.u_storage.shape[0] == (self.nsteps // self.nstxout) + 1, "Number of frames is not correct!"
+        assert self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1, "Number of frames is not correct!"
 
-        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout ), "Time step distance is not as expected!"
-        assert np.allclose( self.dt * self.nstxout, np.diff( self.time_array ) ), "Time step distance is not as expected!"
+        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip), "Time step distance is not as expected!"
+        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ) ), "Time step distance is not as expected!"
 
         return 1
     
-    def load_data_wrap(self):
+    def load_data_wrap(self, block = None, skip = 1):
 
         try:
-            if self.w_storage.shape[0] == self.nsteps // self.nstxout: return 0
+            if self.w_storage.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
         except: pass
+
+        if block == None: block = np.arange( self.N )
         
-        self.w_storage  = np.zeros( (0, self.N, 2 ), dtype = np.float32 )
-        self.time_array = np.zeros( (0)                   , dtype = np.float32 )
+        self.w_storage  = np.zeros( (0, len(block), 2), dtype = np.float32 )
+        self.time_array = np.zeros( (0)               , dtype = np.float32 )
 
         for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
 
             chk_number = str(chk_number)
 
-            try: 
+            if chk_number == "1":
 
-                self.w_storage  = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy") ))
-                self.time_array = np.append( self.time_array, np.load(self.output +   f"_time.{chk_number.zfill(5)}.npy")  ) 
+                self.w_storage  = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")[::skip, block, :] ))
+                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")[::skip] ) 
 
-            except FileNotFoundError as e:
-                pass
+            else:
+
+                data = np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")
+                time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
+
+                start_idx = np.where( (time * self.dt) % skip == 0 )[0][0]
+
+                self.w_storage  = np.vstack( (self.w_storage, data[start_idx::skip, block, :] ))
+                self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
+
+        print(f"Check {chk_number}: {self.time_array[-1]}")
 
         #Validation
-        assert self.w_storage.shape[0] == (self.nsteps // self.nstxout) + 1, "Number of frames is not correct!"
+        assert self.w_storage.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.w_storage.shape[0]}"
 
-        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout ), "Time step distance is not as expected!"
-        assert np.allclose( self.dt * self.nstxout, np.diff( self.time_array ) ), "Time step distance is not as expected!"
+        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip), "Time step distance is not as expected!"
+        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ) ), "Time step distance is not as expected!"
 
         return 1
 
 
-    def mean_square_displacement(self, begin = 0, stop = None, fft=True):
+    def mean_square_displacement(self, begin = 0, stop = None, fft = True, block = None):
 
         """
         Mean Square Displacement
@@ -814,6 +838,8 @@ class Universe(base):
  
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+
+        if type(block) == type(None): block = np.arange( self.N )
         
         #Convert time to frames
         begin = int( np.round( begin / self.dt / self.nstxout ) )
@@ -828,7 +854,7 @@ class Universe(base):
         print("")
 
         #Load data
-        self.load_data_unwrap()
+        self.load_data_unwrap(block = block)
 
         u_storage_analysis = np.copy( self.u_storage[begin:stop, :, :] )
 
@@ -845,7 +871,58 @@ class Universe(base):
         tau = tau * self.dt * self.nstxout
 
         return tau, msd, sd_per_particle
+    
+    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5):
 
+        """
+        Mean Square Displacement
+
+        Calculate the Mean Square Displacement of the particles for different lag times.
+
+        Parameters
+        ----------
+
+        skip := float
+            Skip lag times to decrease calculation time (ns)
+        begin := float
+            Start time for analysis (ns)
+        stop := float
+            Stop time for analysis (ns)
+        """
+        
+        if stop == None: stop = self.nsteps * self.dt
+ 
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+
+        if block == None: block = np.arange( self.N )
+        if skip  == None: skip  = self.dt / self.nstxout
+        
+        #Convert time to frames
+        skip  = int( np.round( skip  / self.dt / self.nstxout ) )
+        begin = int( np.round( begin / self.dt / self.nstxout ) ) // skip
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) ) // skip
+        
+        #Number of steps for analysis
+        nsteps_analysis = (stop - begin)
+
+        print(f"Calculating RDF...")
+        print(f"Start: Frame {begin}")
+        print(f"Stop : Frame {stop} ")
+        print(f"Skip : Frame {skip} ") 
+        print("")
+
+        #Load data
+        self.load_data_wrap(skip = skip)
+
+        w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
+
+        assert nsteps_analysis == w_storage_analysis.shape[0], 'Not correct number of frames'
+
+        binmids, rdf, cdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
+        
+        return binmids, rdf.mean(0), cdf.mean(0)
+    
     def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max", fft=True):
 
         """

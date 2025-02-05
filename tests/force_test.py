@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
+import matplotlib.pyplot as plt
 
+import brownlipid
 from brownlipid import force
 from brownlipid import utils
 
@@ -285,3 +287,90 @@ def test_calculate_force_multiple_pairs():
     
     # Verify total number of particles
     assert force_per_particle.shape == (N, 2)
+
+def test_calculate_force_values():
+    
+    def naive_force(r, sig, eps): return 48 * eps * ((sig/r)**12 - 0.5 * (sig/r)**6) / r
+
+    lj_sig = 0.7706
+    lj_eps = 0.3221
+
+    lj_A12 = 48 * lj_eps * lj_sig**12
+    lj_B6  = 24 * lj_eps * lj_sig**6
+
+    rij      = 1.1*np.random.rand(1000000,2).astype(np.float32) + 0.8
+    rij_norm = 1.1*np.random.rand(1000000,1).astype(np.float32) + 0.8
+    rij_norm = np.sort(rij_norm)
+
+    rij      = rij_norm * rij / np.linalg.norm(rij, axis = 1).reshape(-1,1)
+    rij_sq    = rij_norm**2
+
+    y_pred = force.calculate_force(rij, rij_sq, N = int(2E6), lj_A12 = lj_A12, lj_B6= lj_B6, masked_pairlist=np.split(np.arange(int(2E6)),int(1E6)))
+    y_true = naive_force(r = rij_norm, sig = lj_sig, eps = lj_eps) * rij/rij_norm
+    y_true = y_true.astype(np.float32)
+
+    np.testing.assert_allclose(np.abs(y_pred[::2]), np.abs(y_true), atol=1E-5, rtol=0)
+
+    r = np.linspace(0.1, 5, 50001)
+    plt.scatter(rij_norm, (y_true/rij*rij_norm)[:, 1], s=50, marker='o', facecolor='None', edgecolor = 'blue')
+    plt.scatter(rij_norm, (y_pred[::2]/rij*rij_norm)[:, 1], s=10, marker = "x", lw=3, color = 'r')
+    plt.plot(r, naive_force(r, lj_sig, lj_eps), color = 'green')
+    plt.ylim(-2, 2)
+    plt.xlim(0, 2)
+
+    plt.savefig("test_force_kernel.png", dpi = 300)
+
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+#@pytest.mark.parametrize("L, apl", [(5, 0.66), (5, 2.35045)])
+@pytest.mark.parametrize("L, apl", [(10, 0.66), (10, 2.35045)])
+def test_pair_function_no_domains(L, apl):
+
+    d_coeff = 0.0000504694
+    nsteps  = 1E7
+    dt      = 0.1
+    N_Lipids = int( np.round( (L**2) / apl ) )
+
+    uni = brownlipid.Universe(
+                          size_x = L,
+                          size_y = L,
+                               N = N_Lipids,
+                         pbc_dim = 'xy',
+                          nsteps = int(nsteps),
+                              dt = dt,
+                         nstxout = 100,
+                    base_d_coeff = d_coeff,
+                 external_forces = {'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':10},
+                         output  = f"no_domains/trajectory_pp_g_{L}_{apl}",
+                         nstchk  = int(nsteps) )
+
+    uni.evolve()
+
+@pytest.mark.parametrize("L, r,apl", [(10, 4, 0.66), (10, 2.5, 0.66), (10, 2.5, 2.35045)])
+def test_pair_function_domains(L, r, apl):
+
+    d_coeff = 0.0000504694
+    nsteps  = 1E7
+    dt      = 0.1
+
+    effA = L**2 - np.pi * r**2
+
+    N_Lipids = int( np.round( effA / apl ) )
+
+    uni = brownlipid.Universe(
+                          size_x = L,
+                          size_y = L,
+                               N = N_Lipids,
+                         pbc_dim = 'xy',
+                          nsteps = int(nsteps),
+                 hard_boundaries = {"Circle":[[np.inf, r, L/2, L/2]]},
+                        softwall = True,
+                              dt = dt,
+                         nstxout = 100,
+                    base_d_coeff = d_coeff,
+                 external_forces = {'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':10},
+                         output  = f"access_domain/trajectory_L_{L}_APL_{apl}_r_{r}",
+                         nstchk  = int(nsteps) )
+
+    uni.evolve()

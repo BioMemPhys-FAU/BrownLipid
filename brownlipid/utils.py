@@ -9,7 +9,7 @@ This module contains a bunch of helper functions that are used in multiple steps
 
 import numpy as np
 import matplotlib.pyplot as plt
-
+from tqdm import tqdm
 from numba import jit,prange
 
 @jit(nopython=True)
@@ -429,17 +429,22 @@ def get_elements_only_in_a(a, b, assume_unique):
     #Return only the elements
     return a[ mask ]
 
-#@jit(nopython=True, fastmath=True)
+@jit(nopython=True, fastmath=True, parallel = False)
 def evaluate_lagtimes(pos, lagtimes, N):
     
     #Storage arrays
     msd             = np.zeros(  lagtimes.shape[0],     dtype = np.float32)
     sd_per_particle = np.zeros( (lagtimes.shape[0], N), dtype = np.float32)
 
+    nlags = len( lagtimes )
+
     #Evalulate lagtimes
-    for i, lag in enumerate(lagtimes):
+    for i in prange(nlags):
 
         if i == 0: continue
+        
+        lag = lagtimes[i]
+
         dr = pos[:-lag] - pos[lag:]
 
         sqdist = np.square(dr).sum(axis=-1)
@@ -607,20 +612,37 @@ def vector_field(pos, displacement, nx, ny, grid, idx_grid,  pbc_dim):
 
     return store_vector / divid_vector
 
+#@jit(nopython=True)
+def self_rdf(pos, pbc_dim, r_max, binwidth, exp_density):
 
+    nFrames, N, _ = pos.shape
 
-
-
-
-
-
-
+    print("Number of frames:", nFrames)
+    print("Number of particles:", N)
     
-        
+    #RDF calculation
+    bins          = np.linspace(0, r_max, int( np.round( r_max / binwidth + 1.0 ) ) )
+    _, edges      = np.histogram( a = [], bins = bins )
 
+    edges         = edges.astype(np.float32)
+    
+    shell_area    = np.pi * (edges[1:]**2 - edges[:-1]**2)
+    binmids       = (edges[1:] + edges[:-1]) / 2
 
+    rdf = np.zeros( (nFrames, len(binmids) ) )
+    cdf = np.zeros( (nFrames, len(binmids) ) )
 
+    for i in tqdm( range(nFrames) ):
 
+        dist, vec = distance_matrix_NxN(pos = pos[i], N = N, pbc_dim = pbc_dim, offsets = np.zeros((N, N), dtype = np.float32))
 
+        dist = dist.flatten()
 
+        dist = dist[np.isfinite(dist)]
 
+        hist, _ = np.histogram( a = dist, bins = bins )
+
+        rdf[i]  = 2 * hist / shell_area / (N-1) / exp_density
+        cdf[i]  = np.cumsum( 2 * hist / (N-1) )
+
+    return binmids, rdf, cdf

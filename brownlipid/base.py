@@ -36,6 +36,7 @@ class base:
         
         self.size_x               = size_x
         self.size_y               = size_y
+        self.area                 = size_x * size_y
         self.N                    = N
         self.nsteps               = nsteps
         self.dt                   = dt
@@ -51,6 +52,7 @@ class base:
         self.external_forces      = external_forces
         self.temp                 = temp
         self.RT                   = 8.3145 * 1E-3 * self.temp
+        self.NRT                  = N * self.RT
         self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
         self.softwall             = softwall
         #Base checking
