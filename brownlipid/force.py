@@ -243,7 +243,7 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
 
         k += 1
 
-    return force_per_particle, virial.sum(), pote.sum()
+    return force_per_particle, virial, pote
 
 @jit(nopython=True)
 def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):

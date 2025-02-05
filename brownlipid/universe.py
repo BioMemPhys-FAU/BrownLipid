@@ -137,8 +137,8 @@ class Universe(base):
 
                 f_inside[   chk_frame_index ] = self.in_domains 
 
-                potEnergy[  chk_frame_index ] = self.pote
-                Virial[     chk_frame_index ] = self.virial
+                potEnergy[  chk_frame_index ] = self.pote.sum()
+                Virial[     chk_frame_index ] = self.virial.sum()
 
                 #If check pointing is requested then write current storage arrays to disk and renew them
                 if not i % self.nstchk:

@@ -290,35 +290,75 @@ def test_calculate_force_multiple_pairs():
 
 def test_calculate_force_values():
     
-    def naive_force(r, sig, eps): return 48 * eps * ((sig/r)**12 - 0.5 * (sig/r)**6) / r
+    #Naive Test Functions -> Ground Truth
+    def naive_force(r, sig, eps):  return 48 * eps * ((sig/r)**12 - 0.5 * (sig/r)**6) / r
+    def naive_energy(r, sig, eps): return  4 * eps * ((sig/r)**12 -       (sig/r)**6)
+    def naive_virial(r, sig, eps): return 48 * eps * ((sig/r)**12 - 0.5 * (sig/r)**6)
 
+    #Parameters
     lj_sig = 0.7706
     lj_eps = 0.3221
 
     lj_A12 = 48 * lj_eps * lj_sig**12
     lj_B6  = 24 * lj_eps * lj_sig**6
 
-    rij      = 1.1*np.random.rand(1000000,2).astype(np.float32) + 0.8
-    rij_norm = 1.1*np.random.rand(1000000,1).astype(np.float32) + 0.8
+    N = int(1E2)
+
+    #Get random data in a reasonable distance
+    rij      = 1.1*np.random.rand(N, 2).astype(np.float32) + 0.8
+    rij_norm = 1.1*np.random.rand(N, 1).astype(np.float32) + 0.8
     rij_norm = np.sort(rij_norm)
 
     rij      = rij_norm * rij / np.linalg.norm(rij, axis = 1).reshape(-1,1)
-    rij_sq    = rij_norm**2
+    rij_sq   = rij_norm**2
 
-    y_pred = force.calculate_force(rij, rij_sq, N = int(2E6), lj_A12 = lj_A12, lj_B6= lj_B6, masked_pairlist=np.split(np.arange(int(2E6)),int(1E6)))
-    y_true = naive_force(r = rij_norm, sig = lj_sig, eps = lj_eps) * rij/rij_norm
-    y_true = y_true.astype(np.float32)
+    masked_pairlist = np.array( np.split( np.arange(int(2 * N)), int(N)) )
 
-    np.testing.assert_allclose(np.abs(y_pred[::2]), np.abs(y_true), atol=1E-5, rtol=0)
+    #Call force kernel to get values from the BrownLipid program
+    y_pred, y_virial_pred, y_pote_pred = force.calculate_force(rij, rij_sq, N = int(2 * N), lj_A12 = lj_A12, lj_B6= lj_B6, masked_pairlist=masked_pairlist)
+    
+    #Call naive function to get ground truth values
+    y_true                             = naive_force( r = rij_norm, sig = lj_sig, eps = lj_eps)      * rij/rij_norm
+    y_pote_true                        = naive_energy(r = rij_norm, sig = lj_sig, eps = lj_eps)
+    y_virial_true                      = naive_virial(r = rij_norm, sig = lj_sig, eps = lj_eps)
+    
+    y_true                             = y_true.astype(np.float32)
+    y_pote_true                        = y_pote_true.astype(np.float32)
+    y_virial_true                      = y_virial_true.astype(np.float32)
 
+    #Test
+    np.testing.assert_allclose(y_pred[::2]   , y_true,        atol=1E-5, rtol=0)
+    np.testing.assert_allclose(y_virial_pred , y_virial_true, atol=1E-5, rtol=0)
+    np.testing.assert_allclose(y_pote_pred   , y_pote_true,   atol=1E-5, rtol=0)
+
+    #Plot
     r = np.linspace(0.1, 5, 50001)
-    plt.scatter(rij_norm, (y_true/rij*rij_norm)[:, 1], s=50, marker='o', facecolor='None', edgecolor = 'blue')
-    plt.scatter(rij_norm, (y_pred[::2]/rij*rij_norm)[:, 1], s=10, marker = "x", lw=3, color = 'r')
+    plt.scatter(rij_norm, (y_true/rij*rij_norm)[:, 1], s=50, marker='o', facecolor='None', edgecolor = 'blue', label = 'Kernel')
+    plt.scatter(rij_norm, (y_pred[::2]/rij*rij_norm)[:, 1], s=10, marker = "x", lw=3, color = 'r', label = 'Naive')
     plt.plot(r, naive_force(r, lj_sig, lj_eps), color = 'green')
     plt.ylim(-2, 2)
     plt.xlim(0, 2)
-
+    plt.legend(loc = 'upper right')
     plt.savefig("test_force_kernel.png", dpi = 300)
+    plt.close()
+    
+    plt.scatter(rij_norm, y_pote_true, s=50, marker='o', facecolor='None', edgecolor = 'blue', label = 'Kernel')
+    plt.scatter(rij_norm, y_pote_pred, s=10, marker = "x", lw=3, color = 'r', label = 'Naive')
+    plt.plot(r, naive_energy(r, lj_sig, lj_eps), color = 'green')
+    plt.ylim(-2, 2)
+    plt.xlim(0, 2)
+    plt.legend(loc = 'upper right')
+    plt.savefig("test_energy_kernel.png", dpi = 300)
+    plt.close()
+    
+    plt.scatter(rij_norm, y_virial_true, s=50, marker='o', facecolor='None', edgecolor = 'blue', label = 'Kernel')
+    plt.scatter(rij_norm, y_virial_pred, s=10, marker = "x", lw=3, color = 'r', label = 'Naive')
+    plt.plot(r, naive_virial(r, lj_sig, lj_eps), color = 'green')
+    plt.ylim(-2, 2)
+    plt.xlim(0, 2)
+    plt.legend(loc = 'upper right')
+    plt.savefig("test_virial_kernel.png", dpi = 300)
+    plt.close()
 
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------------
