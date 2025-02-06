@@ -63,6 +63,8 @@ class base:
         assert self.nsteps % self.nstchk  == 0, "Frequency of checkpoints (nstchk) must be multiple of number of steps!"
         assert self.nstchk % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of frequency of checkpoints (nstchk)!"
         
+        self.offsets = np.zeros( (self.N, self.N) , dtype = np.float32)
+        
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #PBC Handling
         pbc_index = []

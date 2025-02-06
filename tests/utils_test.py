@@ -1,4 +1,5 @@
 from brownlipid import utils
+import brownlipid
 
 import numpy as np
 
@@ -6,7 +7,6 @@ import pytest
 
 @pytest.mark.parametrize("x, threshold", [(5, 6), (6, 6), (7, 6)])
 def test_heaviside(x, threshold):
-
 
     output = utils.heaviside(x, threshold)
 
@@ -197,3 +197,46 @@ def test_msd(F, N):
 
     np.testing.assert_allclose(msd, msd_fft)
     np.testing.assert_allclose(sd_per_particle, sd_per_particle)
+
+def test_unwrapping():
+
+    d_coeff = 0.0000504694
+    nsteps  = 1E5
+    dt      = 0.1
+    apl     = 0.66
+    L       = 5
+    N_Lipids = int( np.round( (L**2) / apl ) )
+
+    uni = brownlipid.Universe(
+                          size_x = L,
+                          size_y = L,
+                               N = N_Lipids,
+                         pbc_dim = 'xy',
+                          nsteps = int(nsteps),
+                              dt = dt,
+                         nstxout = 1,
+                    base_d_coeff = d_coeff,
+                 external_forces = {'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':10},
+                         output  = f"no_domains/trajectory_validate_unwrapping",
+                         nstchk  = int(nsteps) )
+
+    uni.evolve()
+
+    uni.load_data_wrap(  block = None, skip = 1)
+    uni.load_data_unwrap(block = None, skip = 1)
+
+    uwrap_true    = np.zeros_like( uni.w_storage, dtype = np.float32 )
+
+    uwrap_true[0] = uni.w_storage[0]
+
+    for i in range(0, int(nsteps)):
+
+        uwrap_true[i + 1] = uni.w_storage[i + 1] - np.floor( ( uni.w_storage[i + 1] - uwrap_true[i] ) / L + 0.5 ) * L
+
+    np.save(arr = uwrap_true, file = "no_domains/uwrap_true")
+
+    np.testing.assert_allclose( uwrap_true, uni.u_storage, rtol = 0, atol = 1E-5 )
+
+
+
+

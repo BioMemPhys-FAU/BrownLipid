@@ -58,29 +58,29 @@ def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw
 
         #### BUFFER RADIUS
         #Pairlist       -> Contains everything that is inside the buffer radius of a particle
-        pairlist_rij, pairlist_rij_sqrt, pairlist, _, _, _ = force.generate_pairlist(dist_mat= dist_mat, vec_mat = vec_mat, lj_buffer = buffer_radius)
+        pairlist_rij, pairlist_rij_sqrt, pairlist, _, _, _ = generate_pairlist(dist_mat= dist_mat, vec_mat = vec_mat, lj_buffer = buffer_radius)
 
     #Update distances in the self.pairlist
     else: 
 
         #### BUFFER RADIUS
         #Update pairlist -> Update every distance and distance vector inside the buffer radius of a particle
-        pairlist_rij, pairlist_rij_sqrt = force.update_pairlist(ref_pos   = ref_pos, conf_pos  = conf_pos, pairlist  = pairlist, pbc_dim   = pbc_dim, offsets   = offsets[ pairlist[:, 0], pairlist[:, 1] ])
+        pairlist_rij, pairlist_rij_sqrt = update_pairlist(ref_pos   = ref_pos, conf_pos  = conf_pos, pairlist  = pairlist, pbc_dim   = pbc_dim, offsets   = offsets[ pairlist[:, 0], pairlist[:, 1] ])
     
     #### INNER RADIUS
     #Obtain effective distances and distance vectors that are taking into account for the LJ interaction between particles
-    effective_rij, effective_rij_sqrt, effective_mask, _, _ = force.filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+    effective_rij, effective_rij_sqrt, effective_mask, _, _ = filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
     
 
     if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, 0, 0
     assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
     
-    force_per_particle, virial, pote = force.calculate_force(rij             = effective_rij,
-                                                             rij_sq          = effective_rij_sqrt**2,
-                                                             N               = ref_pos.shape[0],
-                                                             lj_A12          = A12,
-                                                             lj_B6           = B6,
-                                                             masked_pairlist = pairlist[ effective_mask ])
+    force_per_particle, virial, pote = calculate_force(rij             = effective_rij,
+                                                       rij_sq          = effective_rij_sqrt**2,
+                                                       N               = ref_pos.shape[0],
+                                                       lj_A12          = A12,
+                                                       lj_B6           = B6,
+                                                       masked_pairlist = pairlist[ effective_mask ])
  
 
     return force_per_particle, pairlist, virial, pote

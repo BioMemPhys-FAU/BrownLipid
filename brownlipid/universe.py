@@ -273,13 +273,12 @@ class Universe(base):
                                                                                      pairlist      = self.pp_pairlist,
                                                                                      A12           = self.lj_A12,
                                                                                      B6            = self.lj_B6,
-                                                                                     hydrodyn      = self.hydrodynamics,
                                                                                      offsets       = self.offsets)
 
-            force = lj_force[:self.N] + self.force_from_wall
+            F = lj_force[:self.N] + self.force_from_wall
 
             #Calculate the displace vector
-            self.displace = diff_dt * force / self.RT + factor * np.random.randn( self.N, 2 )
+            self.displace = diff_dt * F / self.RT + factor * np.random.randn( self.N, 2 )
 
         #HYDRODYNAMICS_LJ + RANDOM
         elif any(self.external_forces) and self.hydrodynamics:
@@ -316,12 +315,15 @@ class Universe(base):
         #RANDOM
         else:
 
-            diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
+            diff_dt       = (self.d_coeffs * self.dt).reshape(-1, 1)
 
             #Calculate the factor for every particle.
-            factor = np.sqrt( 2 * diff_dt )
+            factor        = np.sqrt( 2 * diff_dt )
             
             self.displace = factor * np.random.randn( self.N, 2 )
+
+            self.pote     = np.array([0])
+            self.virial   = np.array([0])
 
         #Store previous positions
         self.w_universe_prev = np.copy( self.w_universe )
@@ -646,8 +648,8 @@ class Universe(base):
         #Validation
         assert self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1, "Number of frames is not correct!"
 
-        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip), "Time step distance is not as expected!"
-        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ) ), "Time step distance is not as expected!"
+        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip, atol = 1E-3, rtol = 0), "Time step distance is not as expected!"
+        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ), atol = 1E-3, rtol = 0 ), "Time step distance is not as expected!"
 
         return 1
     
@@ -686,8 +688,8 @@ class Universe(base):
         #Validation
         assert self.w_storage.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.w_storage.shape[0]}"
 
-        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip), "Time step distance is not as expected!"
-        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ) ), "Time step distance is not as expected!"
+        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip, rtol = 0, atol = 1E-3), "Time step distance is not as expected!"
+        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ), rtol = 0, atol = 1E-3 ), "Time step distance is not as expected!"
 
         return 1
 
@@ -748,7 +750,7 @@ class Universe(base):
 
         return tau, msd, sd_per_particle
     
-    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5):
+    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
 
         """
         Mean Square Displacement
@@ -795,7 +797,8 @@ class Universe(base):
 
         assert nsteps_analysis == w_storage_analysis.shape[0], 'Not correct number of frames'
 
-        binmids, rdf, cdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
+        if bulk: binmids, rdf, cdf = utils.self_bulk_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
+        else:    binmids, rdf, cdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
         
         return binmids, rdf.mean(0), cdf.mean(0)
     

@@ -177,6 +177,25 @@ def apply_pbc_vector(vec, pbc_dim) -> np.ndarray:
         return vec
 
 @jit(nopython=True)
+def apply_pbc_vector_3dim(vec, pbc_dim) -> np.ndarray:
+
+        """
+        Periodic boundary conditions for DIRECTIONAL VECTORS a.k.a. VECTORS.
+
+        If a component of a vector is larger than half the box size (positive and negative), subtract one box size.
+
+        """
+        
+        assert vec.ndim == 3, 'Vector has not a dimension of 2'
+        
+        #Apply PBC
+        for i, size in zip(pbc_dim[0], pbc_dim[1]):
+            vec[:, :, i] = np.where(vec[:, :, i] >    size / 2, vec[:, :, i] - size, vec[:, :, i])
+            vec[:, :, i] = np.where(vec[:, :, i] <= - size / 2, vec[:, :, i] + size, vec[:, :, i])
+
+        return vec
+
+@jit(nopython=True)
 def apply_hard_wall_scale(pos, d, hard_wall, bounce_scale):
 
     """
@@ -644,5 +663,48 @@ def self_rdf(pos, pbc_dim, r_max, binwidth, exp_density):
 
         rdf[i]  = 2 * hist / shell_area / (N-1) / exp_density
         cdf[i]  = np.cumsum( 2 * hist / (N-1) )
+
+    return binmids, rdf, cdf
+
+def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, domain_coords, radii, rmin):
+
+    nFrames, N, _ = pos.shape
+
+    print("Number of frames:", nFrames)
+    print("Number of particles:", N)
+    
+    #RDF calculation
+    bins          = np.linspace(0, r_max, int( np.round( r_max / binwidth + 1.0 ) ) )
+    _, edges      = np.histogram( a = [], bins = bins )
+
+    edges         = edges.astype(np.float32)
+    
+    shell_area    = np.pi * (edges[1:]**2 - edges[:-1]**2)
+    binmids       = (edges[1:] + edges[:-1]) / 2
+
+    rdf = np.zeros( (nFrames, len(binmids) ) )
+    cdf = np.zeros( (nFrames, len(binmids) ) )
+
+    radii_sq = (radii + 3 * rmin)**2
+
+    for i in tqdm( range(nFrames) ):
+
+        dist2mids = apply_pbc_vector_3dim(vec = pos[i][:, None, :] - domain_coords[None, :, :], pbc_dim = pbc_dim)
+
+        dist2mids = np.sum( dist2mids**2, axis = -1) 
+
+        bulk_mask = np.all( dist2mids > radii_sq, axis = 1)
+        N_eff     = bulk_mask.sum()
+
+        dist, vec = distance_matrix_NxN(pos = pos[i][bulk_mask], N = N_eff, pbc_dim = pbc_dim, offsets = np.zeros((N_eff, N_eff), dtype = np.float32))
+
+        dist = dist.flatten()
+
+        dist = dist[np.isfinite(dist)]
+
+        hist, _ = np.histogram( a = dist, bins = bins )
+
+        rdf[i]  = 2 * hist / shell_area / (N_eff-1) / exp_density
+        cdf[i]  = np.cumsum( 2 * hist / (N_eff-1) )
 
     return binmids, rdf, cdf

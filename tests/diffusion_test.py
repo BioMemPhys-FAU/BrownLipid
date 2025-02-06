@@ -2,7 +2,7 @@ import brownlipid
 import numpy as np
 import pytest
 
-@pytest.mark.parametrize("L,d_coeff,N,nsteps,dt", [(100, 1., 500, 1E7, 1), (100, 0.5, 500, 1E7, 1.0), (100, np.pi, 500, 1E7, 1.0)])
+@pytest.mark.parametrize("L,d_coeff,N,nsteps,dt", [(100, 1., 750, 1E7, 1), (100, 0.5, 750, 1E7, 1.0), (100, np.pi, 750, 1E7, 1.0)])
 def test_diffusion_coefficient(L,d_coeff,N,nsteps,dt):
 
 

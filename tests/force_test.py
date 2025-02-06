@@ -219,7 +219,7 @@ def test_calculate_force_basic_symmetry():
     lj_B6 = 1.0
 
     # Calculate forces
-    force_per_particle = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
+    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
 
     # Check force magnitude is equal
     np.testing.assert_almost_equal(
@@ -251,7 +251,7 @@ def test_calculate_force_no_interaction():
     lj_B6 = 1.0
 
     # Calculate forces
-    force_per_particle = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
+    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
 
     # Check forces are essentially zero
     np.testing.assert_array_almost_equal(force_per_particle, np.zeros((N, 2)))
@@ -283,7 +283,7 @@ def test_calculate_force_multiple_pairs():
     lj_B6 = 1.0
     
     # Calculate forces
-    force_per_particle = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
+    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
     
     # Verify total number of particles
     assert force_per_particle.shape == (N, 2)
@@ -360,6 +360,100 @@ def test_calculate_force_values():
     plt.savefig("test_virial_kernel.png", dpi = 300)
     plt.close()
 
+def test_lennard_kernel():
+    
+    #Naive Test Functions -> Ground Truth
+    def naive_force(r, sig, eps):  return 48 * eps * ((sig/r)**12 - 0.5 * (sig/r)**6) / r
+    def naive_energy(r, sig, eps): return  4 * eps * ((sig/r)**12 -       (sig/r)**6)
+    def naive_virial(r, sig, eps): return 48 * eps * ((sig/r)**12 - 0.5 * (sig/r)**6)
+    
+    #Parameters
+    lj_sig = 0.7706
+    lj_eps = 0.3221
+
+    lj_A12 = 48 * lj_eps * lj_sig**12
+    lj_B6  = 24 * lj_eps * lj_sig**6
+
+    frame   = 1
+    nstlist = 1
+
+    #                 0         1           2         3         4       5
+    pos = np.array([[4.9, 4.9], [5.5, 5.5], [6.25, 6.25], [6.0, 4.0], [10.0, 10.0], [0.873, 0.526]], dtype = np.float32)
+
+    pbc_dim = ([0, 1], [10, 10])
+    buffer_radius = 1.5
+    vdw_cutoff = 1.2
+
+    pairlist = np.array([])
+
+    offsets = np.zeros((6, 6))
+
+    force_per_particle, pairlist, virial, pote = force.lennard_jones(frame = frame, nstlist = nstlist, ref_pos = pos, conf_pos = pos, pbc_dim = pbc_dim, buffer_radius = buffer_radius, vdw_cutoff = vdw_cutoff, pairlist = pairlist, A12 = lj_A12, B6 = lj_B6, offsets = offsets)
+
+    pairlist_true = np.array([ [0, 1],
+                               [0, 3],
+                               [1, 2],
+                               [4, 5] ] )
+
+    np.testing.assert_allclose(pairlist, pairlist_true)
+
+    rij      = pos[ pairlist_true[:, 0] ] - pos[ pairlist_true[:, 1] ]
+    rij      = utils.apply_pbc_vector(vec = rij, pbc_dim = pbc_dim)
+    rij_norm = np.linalg.norm(rij, axis = 1)
+    rij_sq   = rij_norm**2
+
+    force_true  = naive_force( r = rij_norm , sig = lj_sig, eps = lj_eps).reshape(-1,1) * rij / rij_norm.reshape(-1, 1)
+
+    force_per_particle_true = np.array([ force_true[0],                        #Force acting on particle 0 (comes from particle 1)
+                                        -force_true[0] + force_true[2],        #Force acting on particle 1 (comes from particles 0 & 2 )
+                                        -force_true[2],                        #Force acting on particle 2 (comes from particle 1)
+                                             [0.0,0.0],                        #Force acting on particle 3 (nothing, is only in buffer radius of particle 0)
+                                         force_true[3],                        #Force acting on particle 4 (comes from particle 5)
+                                        -force_true[3]  ], dtype = np.float32) #Force acting on particle 5 (comes from particle 4)
+    
+
+    energy_true = naive_energy(r = rij_norm , sig = lj_sig, eps = lj_eps).astype(np.float32)
+    virial_true = naive_virial(r = rij_norm , sig = lj_sig, eps = lj_eps).astype(np.float32)
+
+    idx = np.array([0, 2, 3])
+
+    np.testing.assert_allclose(force_per_particle_true, force_per_particle, rtol = 0, atol = 1E-5)
+    np.testing.assert_allclose(energy_true[idx], pote, rtol = 0, atol = 1E-5)
+    np.testing.assert_allclose(virial_true[idx], virial, rtol = 0, atol = 1E-5)
+    
+    #Plot
+    r = np.linspace(0.1, 5, 50001)
+    
+    plt.scatter(rij_norm, (force_true/rij*rij_norm.reshape(-1, 1))[:, 1],         s=10, marker = "x", lw=3, color = 'r', label = 'Naive')
+ #   plt.scatter(rij_norm, (force_per_particle[idx]/rij*rij_norm.reshape(-1, 1))[:, 1], s=50, marker='o', facecolor='None', edgecolor = 'blue', label = 'Kernel')
+    plt.plot(r, naive_force(r, lj_sig, lj_eps), color = 'green')
+    plt.ylim(-2, 2)
+    plt.xlim(0, 2)
+    plt.legend(loc = 'upper right')
+    plt.savefig("test_force_kernel.png", dpi = 300)
+    plt.close()
+    
+    plt.scatter(rij_norm[idx], pote       , s=50, marker='o', facecolor='None', edgecolor = 'blue', label = 'Kernel')
+    plt.scatter(rij_norm     , energy_true, s=10, marker = "x", lw=3, color = 'r', label = 'Naive')
+    plt.plot(r, naive_energy(r, lj_sig, lj_eps), color = 'green')
+    plt.ylim(-2, 2)
+    plt.xlim(0, 2)
+    plt.legend(loc = 'upper right')
+    plt.savefig("test_energy_kernel.png", dpi = 300)
+    plt.close()
+    
+    plt.scatter(rij_norm[idx], virial     , s=50, marker='o', facecolor='None', edgecolor = 'blue', label = 'Kernel')
+    plt.scatter(rij_norm,      virial_true, s=10, marker = "x", lw=3, color = 'r', label = 'Naive')
+    plt.plot(r, naive_virial(r, lj_sig, lj_eps), color = 'green')
+    plt.ylim(-2, 2)
+    plt.xlim(0, 2)
+    plt.legend(loc = 'upper right')
+    plt.savefig("test_virial_kernel.png", dpi = 300)
+    plt.close()
+    
+
+
+
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -387,14 +481,19 @@ def test_pair_function_no_domains(L, apl):
 
     uni.evolve()
 
-@pytest.mark.parametrize("L, r,apl", [(10, 4, 0.66), (10, 2.5, 0.66), (10, 2.5, 2.35045)])
-def test_pair_function_domains(L, r, apl):
+@pytest.mark.parametrize("L, r, apl, equalize", [(20, 6.18, 0.66, True), (20, 4.37, 0.66, True), (20, 6.18, 0.66, False), (20, 4.37, 0.66, False), (10, 2.5, 2.35045, False)])
+def test_pair_function_domains(L, r, apl, equalize):
 
     d_coeff = 0.0000504694
-    nsteps  = 1E7
+    nsteps  = 1E6
     dt      = 0.1
 
-    effA = L**2 - np.pi * r**2
+    if equalize: 
+        effA = L**2 - np.pi * (r - 0.25)**2 
+        eqTrue = 'Yes'
+    else: 
+        effA = L**2 - np.pi * r**2
+        eqTrue = 'No'
 
     N_Lipids = int( np.round( effA / apl ) )
 
@@ -410,7 +509,7 @@ def test_pair_function_domains(L, r, apl):
                          nstxout = 100,
                     base_d_coeff = d_coeff,
                  external_forces = {'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':10},
-                         output  = f"access_domain/trajectory_L_{L}_APL_{apl}_r_{r}",
+                         output  = f"access_domain/trajectory_L_{L}_APL_{apl}_r_{r}_equalize_{eqTrue}",
                          nstchk  = int(nsteps) )
 
     uni.evolve()
