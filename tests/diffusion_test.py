@@ -27,4 +27,7 @@ def test_diffusion_coefficient(L,d_coeff,N,nsteps,dt):
 
     d_coeff_fit, intercept = uni.mean_square_displacement_fit(tau = tau, msd = msd, dim = 2, begin = 0., stop = 100000.)
 
+    print("True Diffusion:", d_coeff)
+    print("Sim. Diffusion:", d_coeff_fit)
+
     np.testing.assert_allclose(d_coeff_fit, d_coeff, rtol = 0, atol = 1E-2)
