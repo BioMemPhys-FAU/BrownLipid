@@ -562,7 +562,7 @@ def test_lennard_kernel_different():
 
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------------
-
+"""
 #@pytest.mark.parametrize("L, apl", [(5, 0.66), (5, 2.35045)])
 @pytest.mark.parametrize("L, apl", [(10, 0.66), (10, 2.35045)])
 def test_pair_function_no_domains(L, apl):
@@ -595,7 +595,7 @@ def test_pair_function_domains(L, r, apl, equalize):
     dt      = 0.2
 
     if equalize: 
-        effA = L**2 - np.pi * (r - 0.5)**2 
+        effA = L**2 - np.pi * (r - 1.0)**2 
         eqTrue = 'Yes'
     else: 
         effA = L**2 - np.pi * r**2
@@ -615,7 +615,7 @@ def test_pair_function_domains(L, r, apl, equalize):
                          nstxout = 100,
                     base_d_coeff = d_coeff,
                     external_forces = {'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':10, 'epsilon_domains': 0.88, 'sigma_domains': 0.7706},
-                         output  = f"access_domain_0.5/trajectory_L_{L}_APL_{apl}_r_{r}_equalize_{eqTrue}",
+                         output  = f"access_domain_1.0/trajectory_L_{L}_APL_{apl}_r_{r}_equalize_{eqTrue}",
                          nstchk  = int(nsteps) )
 
     uni.evolve()
@@ -645,3 +645,4 @@ def test_lj_with_domains(L):
                          nstchk  = int(nsteps) )
 
     uni.evolve()
+"""

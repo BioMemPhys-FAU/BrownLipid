@@ -40,6 +40,7 @@ class base:
         self.size_y               = size_y
         self.area                 = size_x * size_y
         self.N                    = N
+        self.N_only_lipids        = N
         self.nsteps               = nsteps
         self.dt                   = dt
         self.nstxout              = nstxout
@@ -299,7 +300,6 @@ class base:
             print("Domain/Domain")
             print(self.offsets[-1,-1])
             
-            self.N_only_lipids = self.N
             self.N             = self.N_p_Domains
 
             print("System topology")
