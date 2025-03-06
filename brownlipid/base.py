@@ -3,6 +3,7 @@ from typing import Union, Dict, Any
 
 import numpy as np
 from tqdm import tqdm 
+import sys
 
 from . import utils
 
@@ -26,6 +27,7 @@ class base:
                    hydrodynamics:                     bool = False,
                        viscosity:                    float = 1,
                   random_domains:                     bool = False,
+               diffusion_domains:                    float = 0.0,
                       metropolis:                     dict = {},
                  external_forces:                     dict = {},
                             temp:                    float = 298,
@@ -54,7 +56,9 @@ class base:
         self.RT                   = 8.3145 * 1E-3 * self.temp
         self.NRT                  = N * self.RT
         self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
+        self.diffusion_domains    = diffusion_domains
         self.softwall             = softwall
+ 
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
         assert self.nstchk >= self.nstxout, "Frequency of output (nstxout) must be smaller than frequency of checkpoints (nstchk)!"
@@ -62,7 +66,7 @@ class base:
         assert self.nsteps % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of number of steps!"
         assert self.nsteps % self.nstchk  == 0, "Frequency of checkpoints (nstchk) must be multiple of number of steps!"
         assert self.nstchk % self.nstxout == 0, "Frequency of output (nstxout) must be multiple of frequency of checkpoints (nstchk)!"
-        
+
         self.offsets = np.zeros( (self.N, self.N) , dtype = np.float32)
         
         #----------------------------------------------------------------------------------------------------------------------------------------------
@@ -173,8 +177,7 @@ class base:
 
         else: self.hard_boundaries_geometry = {}
         
-        #It is expected that no particle starts in a domain!
-        self.in_domains = np.zeros( self.N, dtype = bool ) 
+        self.d_coeffs = np.append( self.d_coeffs, np.repeat( self.diffusion_domains, self.n_domains ))
         
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #Initialize for metropolis steps
@@ -205,15 +208,69 @@ class base:
 
         if any(external_forces):
 
+            print("Inter-particle forces are requested!")
+            print("Setting up LJ...")
+
             #Pre-calculate lennard-jones parameters to speed up calculations
             self.lj_sig = external_forces['sigma']
             self.lj_eps = external_forces['epsilon']
+            
+            if 'sigma_domains' in external_forces.keys() and 'epsilon_domains' in external_forces.keys():
+                print("Found LJ for domains!")
+                self.lj_sig_domains = external_forces['sigma_domains']
+                self.lj_eps_domains = external_forces['epsilon_domains']
+            else:
+                print("LJ parameters for domains not found. Take the ones for lipids!")
+                self.lj_sig_domains = external_forces['sigma']
+                self.lj_eps_domains = external_forces['epsilon']
 
-            self.rmin   = self.lj_sig * 2**(1/6)
+            print("Found the following LJ parameters:")
+            print("Lipids - sigma/eps:", self.lj_sig, self.lj_eps )
+            print("Domains - sigma/eps:", self.lj_sig_domains, self.lj_eps_domains )
 
-            self.lj_A12 = 48 * self.lj_eps * self.lj_sig**12
-            self.lj_B6  = 24 * self.lj_eps * self.lj_sig**6
 
+            self.rmin           = self.lj_sig * 2**(1/6)
+            self.rmin_domains   = self.lj_sig_domains * 2**(1/6)
+
+            #Setup interaction matrices
+            self.N_p_Domains = self.N + self.n_domains
+
+            #Sigma
+            self.sigma_matrix = np.ones( (self.N_p_Domains, self.N_p_Domains) , dtype = np.float32)
+            self.sigma_matrix *= self.lj_sig
+
+            for i in range(self.N_p_Domains):
+                for j in range(self.N_p_Domains):
+
+                    if i >= self.N and j >= self.N: self.sigma_matrix[i, j] = self.lj_sig_domains
+                    elif i >= self.N:               self.sigma_matrix[i, j] = (self.lj_sig_domains + self.lj_sig) / 2
+                    elif j >= self.N:               self.sigma_matrix[i, j] = (self.lj_sig_domains + self.lj_sig) / 2
+                    else: pass
+            
+            #Epsilon
+            self.eps_matrix = np.ones( (self.N_p_Domains, self.N_p_Domains) , dtype = np.float32)
+            self.eps_matrix *= self.lj_eps
+
+            for i in range(self.N_p_Domains):
+                for j in range(self.N_p_Domains):
+
+                    if i >= self.N and j >= self.N: self.eps_matrix[i, j] = self.lj_eps_domains
+                    elif i >= self.N:               self.eps_matrix[i, j] = np.sqrt( (self.lj_eps_domains * self.lj_eps) )
+                    elif j >= self.N:               self.eps_matrix[i, j] = np.sqrt( (self.lj_eps_domains * self.lj_eps) )
+                    else: pass
+
+            self.lj_A12 = 48 * self.eps_matrix * self.sigma_matrix**12
+            self.lj_B6  = 24 * self.eps_matrix * self.sigma_matrix**6
+
+            print("Pre-calculated LJ terms")
+            print("Lipid/Lipid - A12 - B6")
+            print(self.lj_A12[0,0], self.lj_B6[0,0])
+            print("Lipid/Domain - A12 - B6")
+            print(self.lj_A12[0,-1], self.lj_B6[0,-1])
+            print("Domain/Domain - A12 - B6")
+            print(self.lj_A12[-1,-1], self.lj_B6[-1,-1])
+
+            #Parameters for neighbour list generation
             self.lj_nstlist = external_forces['nstlist']
             
             #Only squared sums are considerd later
@@ -224,34 +281,70 @@ class base:
             self.pp_pairlist = np.array([])
             
             #Prepare a matrix for offsets (hard sphere domains)
-            self.N_p_Domains = self.N + self.n_domains
-
             self.offsets = np.zeros( (self.N_p_Domains, self.N_p_Domains) , dtype = np.float32)
 
             for i in range(self.N_p_Domains):
                 for j in range(self.N_p_Domains):
 
-                    if i >= self.N and j >= self.N: self.offsets[i, j] = ((self.domain_radii[i%self.N] - self.rmin) + (self.domain_radii[j%self.N]-self.rmin))/2
+                    if i >= self.N and j >= self.N: self.offsets[i, j] = ((self.domain_radii[i%self.N] - self.rmin) + (self.domain_radii[j%self.N]-self.rmin))
                     elif i >= self.N:               self.offsets[i, j] = self.domain_radii[i%self.N] - self.rmin
                     elif j >= self.N:               self.offsets[i, j] = self.domain_radii[j%self.N] - self.rmin
                     else: pass
 
+            print("Following offsets will be used to calculate distances")
+            print("Lipid/Lipid")
+            print(self.offsets[0,  0])
+            print("Lipid/Domain")
+            print(self.offsets[0, -1])
+            print("Domain/Domain")
+            print(self.offsets[-1,-1])
+            
+            self.N_only_lipids = self.N
+            self.N             = self.N_p_Domains
+
+            print("System topology")
+            print("Lipids:", self.N_only_lipids)
+            print("Domains:", self.n_domains)
+            print("Total:", self.N)
+
             if self.hydrodynamics == True: 
 
+                print("Currently deprecated! Will exit!")
+                sys.exit()
+
+
+
+                self.cutoff_a  =  np.repeat( self.rmin, self.N_p_Domains ) 
+                self.cutoff_a[-self.n_domains:] = self.domain_radii - self.rmin
                 self.cutoff_2a = 2 * self.rmin
-                self.cutoff_a  =  self.rmin
                 
                 self.Dij = np.ones( (self.N_p_Domains, self.N_p_Domains, 2, 2), dtype = np.float32 ) * np.nan
 
                 self.viscosity_scale        = (1.380649 * self.temp) / ( self.viscosity * np.pi )
                 self.domain_viscosity_scale = (1.380649 * self.temp) / ( self.viscosity * np.pi )
 
-                print( self.viscosity_scale, (6 * self.cutoff_a), self.cutoff_a)
-                
-                print(np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a))
-                
-                self.Dij[range(self.N_p_Domains), range(self.N_p_Domains)] = np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a)
+                print("Requested hydrodynamics")
+                print("Inserted diffusion coefficients should not play a role anymore, only viscosity")
 
+                print("Viscosity scale factor for near and far field:",  self.viscosity_scale)
+                print("Cutoff a:", self.cutoff_a)
+
+                for i in range(self.N_p_Domains):
+
+                    self.Dij[i,i] = np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a[i])
+                
+                self.cutoff_a  =  self.rmin
+                self.cutoff_2a = 2 * self.rmin
+                
+                print("Self-diffusity term:")
+                print("Normal particle:")
+                print(self.Dij[0,0])
+                print("Domain:")
+                print(self.Dij[-1,-1])
+                
+
+        #It is expected that no particle starts in a domain!
+        self.in_domains = np.zeros( self.N, dtype = bool ) 
                 
 
 

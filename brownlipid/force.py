@@ -14,6 +14,7 @@ Author: Marius Trollmann
 """
 
 from . import utils
+from . import hydrodynamics
 
 import numpy as np
 from numba import jit
@@ -74,13 +75,15 @@ def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw
 
     if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, 0, 0
     assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
+
+    masked_pairlist = pairlist[ effective_mask ]
     
     force_per_particle, virial, pote = calculate_force(rij             = effective_rij,
                                                        rij_sq          = effective_rij_sqrt**2,
                                                        N               = ref_pos.shape[0],
-                                                       lj_A12          = A12,
-                                                       lj_B6           = B6,
-                                                       masked_pairlist = pairlist[ effective_mask ])
+                                                       lj_A12          = A12[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
+                                                       lj_B6           = B6[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
+                                                       masked_pairlist = masked_pairlist)
  
 
     return force_per_particle, pairlist, virial, pote
@@ -118,7 +121,7 @@ def lennard_jones_hydro(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radiu
         #### BUFFER RADIUS
         #Pairlist       -> Contains everything that is inside the buffer radius of a particle
         #Outer Pairlist -> Contains everything that is outside the buffer radius of a particle
-        pairlist_rij, pairlist_rij_sqrt, pairlist, outer_pairlist_rij, outer_pairlist_rij_sqrt, outer_pairlist = force.generate_pairlist(dist_mat  = dist_mat, vec_mat   = vec_mat, lj_buffer = buffer_radius)
+        pairlist_rij, pairlist_rij_sqrt, pairlist, outer_pairlist_rij, outer_pairlist_rij_sqrt, outer_pairlist = generate_pairlist(dist_mat  = dist_mat, vec_mat   = vec_mat, lj_buffer = buffer_radius)
 
         #Hydrodynamics requested
         #Calculate Diffusion coefficients between particles outside the buffer radius
@@ -133,7 +136,7 @@ def lennard_jones_hydro(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radiu
     else: 
 
         #Update pairlist -> Update every distance and distance vector inside the buffer radius of a particle
-        pairlist_rij, pairlist_rij_sqrt = force.update_pairlist(ref_pos   = ref_pos,
+        pairlist_rij, pairlist_rij_sqrt = update_pairlist(ref_pos   = ref_pos,
                                                                 conf_pos  = conf_pos,
                                                                 pairlist  = pairlist,
                                                                 pbc_dim   = pbc_dim,
@@ -141,11 +144,11 @@ def lennard_jones_hydro(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radiu
     
     #### INNER RADIUS
     #Obtain effective distances and distance vectors that are taking into account for the LJ interaction between particles
-    effective_rij, effective_rij_sqrt, effective_mask, _, _ = force.filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+    effective_rij, effective_rij_sqrt, effective_mask, _, _ = filter_pairlist(cutoff = vdw_cutoff, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
     
 
     #Hydrodynamics requested
-    near_rij, near_rij_sqrt, near_mask, far_rij, far_rij_sqrt = force.filter_pairlist(cutoff = cutoff_2a, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
+    near_rij, near_rij_sqrt, near_mask, far_rij, far_rij_sqrt = filter_pairlist(cutoff = cutoff_2a, rij = pairlist_rij, rij_sq = pairlist_rij_sqrt)
 
     #NEAR FIELD DIFFUSION
     rpy_near        = hydrodynamics.rpy_near(rij_sq = near_rij_sqrt, rij = near_rij, a = cutoff_a, viscosity_scale = viscosity_scale)
@@ -164,7 +167,7 @@ def lennard_jones_hydro(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radiu
     if not effective_rij_sqrt.size > 0: return np.zeros_like( conf_pos, dtype = np.float32 ), pairlist, Dij
     assert effective_rij_sqrt.min() >= 1E-12, f'Too small! {effective_rij_sqrt.min()}'
 
-    force_per_particle = force.calculate_hydro_force(rij             = effective_rij,
+    force_per_particle, virial, pote = calculate_hydro_force(rij             = effective_rij,
                                                      rij_sq          = effective_rij_sqrt**2,
                                                      N               = ref_pos.shape[0],
                                                      lj_A12          = A12,
@@ -172,7 +175,7 @@ def lennard_jones_hydro(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radiu
                                                      masked_pairlist = pairlist[ effective_mask ], 
                                                      Dij             = Dij)
 
-    return force_per_particle, pairlist, Dij
+    return force_per_particle, pairlist, Dij, virial, pote
 
 @jit(nopython=True)
 def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
@@ -212,8 +215,8 @@ def calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
     sr6        = inv_rij_sq ** 3
     sr12       = sr6 ** 2
 
-    sr6       *= lj_B6
-    sr12      *= lj_A12
+    sr6        = sr6  *  lj_B6
+    sr12       = sr12 * lj_A12
 
     #Calculate potential energy
     pote       = (sr12 / 2 - sr6 ) / 6
@@ -297,6 +300,7 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
 
     #Multiplicate "scaling factor" with the force direction -> This is now the force acting from particle j on particle i.
     force      = force.reshape(-1, 1) * rij
+    force      = force.astype(np.float32)
 
     #Storage factor for the force per particle
     force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
@@ -316,7 +320,7 @@ def calculate_hydro_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist, Dij):
 
         k += 1
 
-    return force_per_particle
+    return force_per_particle, virial, pote
 
 def generate_pairlist(dist_mat, vec_mat, lj_buffer):
 

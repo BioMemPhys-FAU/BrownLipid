@@ -1,7 +1,7 @@
 import numpy as np
 from numba import jit, prange
 
-@jit(nopython=True, parallel=True)
+@jit(nopython=True, parallel = True)
 def numba_cholesky(a):
 
     L = np.zeros_like(a)
@@ -12,7 +12,7 @@ def numba_cholesky(a):
             
     return L
 
-@jit(nopython=True, parallel=True)
+@jit(nopython=True, parallel = True)
 def get_R(L, N, dt):
 
     R = np.zeros( (N, 2), dtype = np.float32)

@@ -27,9 +27,9 @@ class Universe(base):
         """
         Main Function
         
-        In this function, the positions of the particles are initialized and are then moved forward in time.
+        In this function, the positions of the particles are initialized and then moved forward in time.
         For each step, the components of the displacement vector are randomly sampled from a gaussian distribution and are
-        added to the actual position of the particles. Periodic boundary conditions, domains with different diffusion coefficients, and hard boundaries 
+        added to the actual position of the particles. If requested forces between particles emerging from a Lennard-Jones potential are considered. Periodic boundary conditions, domains with different diffusion coefficients, and hard boundaries 
         are taken into account.
 
         There are two "universe" objects that are considered during the setup and the evolution of the system:
@@ -42,7 +42,7 @@ class Universe(base):
             - Frames are stored only every self.nstxout steps in w_storage/u_storage
             - Arrays w_storage/u_storage are written to disk every self.nstchk steps.
 
-        Therefore self.nstchk // self.nstxout frames are stored in a single checkpoint file.
+        Therefore self.nstchk // self.nstxout frames are stored in a single checkpoint file. Except the first frame, due to the initial frame.
 
         """
 
@@ -75,8 +75,9 @@ class Universe(base):
         time_array[0] = 0
 
         #Store initial fraction of particles in domains
-        f_inside[0] = self.in_domains
+        #f_inside[0] = self.in_domains
 
+        #This array is need for further calculation. If no soft walls are used, it should be always 0.
         self.force_from_wall = np.zeros((self.N, 2), dtype = np.float32)
 
         #---------------------------------------------------------------------------------------------------------------------
@@ -95,8 +96,10 @@ class Universe(base):
             #Calculate forces from softwall bouncing (if applicable)
             if self.softwall == True and len(self.pbc_dim[0]) < 2:
 
-                if self.hydrodynamics == True: self.force_from_wall = utils.apply_soft_wall_force_hydro(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, Dij= self.Dij, N = self.N)
-                else: self.force_from_wall = utils.apply_soft_wall_force(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6)
+                if self.hydrodynamics == True: 
+                    self.force_from_wall = utils.apply_soft_wall_force_hydro(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, Dij= self.Dij, N = self.N)
+                else: 
+                    self.force_from_wall = utils.apply_soft_wall_force(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6)
             
             #Move particles in time
             self.forward_in_time()
@@ -137,8 +140,8 @@ class Universe(base):
 
                 f_inside[   chk_frame_index ] = self.in_domains 
 
-                potEnergy[  chk_frame_index ] = self.pote.sum()
-                Virial[     chk_frame_index ] = self.virial.sum()
+                potEnergy[  chk_frame_index ] = np.sum( self.pote )
+                Virial[     chk_frame_index ] = np.sum( self.virial )
 
                 #If check pointing is requested then write current storage arrays to disk and renew them
                 if not i % self.nstchk:
@@ -202,7 +205,7 @@ class Universe(base):
         #----------------------------------------------------------------------------------------------------------
         #Standard Workflow
         #Sample particle positions from random uniform distribution
-        init_pos = np.random.rand( self.N, 2 )
+        init_pos = np.random.rand( self.N_only_lipids, 2 )
         
         #Scale the coordinates according to the box lengths
         for i, size in enumerate([self.size_x, self.size_y]): init_pos[:, i] *= size
@@ -212,14 +215,18 @@ class Universe(base):
 
         init_pos = clean.clean_domains(init_pos            = init_pos,
                                        geometry_collection = self.hard_boundaries_geometry,
-                                       N                   = self.N,
+                                       N                   = self.N_only_lipids,
                                        lj_sig              = self.lj_sig,
                                        pbc_dim             = self.pbc_dim,
                                        hard_wall           = self.hard_wall,
                                        soft_wall           = self.softwall,
                                        size_x              = self.size_x,
                                        size_y              = self.size_y,
-                                       offsets             = self.offsets[:self.N, :self.N])
+                                       offsets             = self.offsets[:(self.N_only_lipids), :(self.N_only_lipids)])
+
+        init_pos = np.vstack( (init_pos, self.domain_coords) )
+
+        assert init_pos.shape[0] == self.N
 
         #----------------------------------------------------------------------------------------------------------
         #Make some tests if the particle coordinates are in the box
@@ -252,8 +259,6 @@ class Universe(base):
         The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
         """
         
-        w_universe_domains = np.vstack((self.w_universe, self.domain_coords))
-
         #LJ + RANDOM (no hydrodynamics)
         if any(self.external_forces) and not self.hydrodynamics:
         
@@ -265,8 +270,8 @@ class Universe(base):
             #Calculate forces between particles
             lj_force, self.pp_pairlist, self.virial, self.pote = force.lennard_jones(frame         = self.frame,
                                                                                      nstlist       = self.lj_nstlist,
-                                                                                     ref_pos       = w_universe_domains,
-                                                                                     conf_pos      = w_universe_domains,
+                                                                                     ref_pos       = self.w_universe,
+                                                                                     conf_pos      = self.w_universe,
                                                                                      pbc_dim       = self.pbc_dim,
                                                                                      buffer_radius = self.lj_buffer,
                                                                                      vdw_cutoff    = self.lj_cutoff,
@@ -275,7 +280,7 @@ class Universe(base):
                                                                                      B6            = self.lj_B6,
                                                                                      offsets       = self.offsets)
 
-            F = lj_force[:self.N] + self.force_from_wall
+            F = lj_force + self.force_from_wall
 
             #Calculate the displace vector
             self.displace = diff_dt * F / self.RT + factor * np.random.randn( self.N, 2 )
@@ -284,22 +289,22 @@ class Universe(base):
         elif any(self.external_forces) and self.hydrodynamics:
 
             #Calculate forces between particles
-            lj_force, self.pp_pairlist, self.Dij = self.lennard_jones(frame           = self.frame,
-                                                                      nstlist         = self.lj_nstlist,
-                                                                      ref_pos         = w_universe_domains,
-                                                                      conf_pos        = w_universe_domains,
-                                                                      pbc_dim         = self.pbc_dim,
-                                                                      buffer_radius   = self.lj_buffer,
-                                                                      vdw_cutoff      = self.lj_cutoff,
-                                                                      pairlist        = self.pp_pairlist,
-                                                                      A12             = self.lj_A12,
-                                                                      B6              = self.lj_B6,
-                                                                      hydrodyn        = self.hydrodynamics,
-                                                                      cutoff_a        = self.cutoff_a,
-                                                                      cutoff_2a       = self.cutoff_2a,
-                                                                      viscosity_scale = self.viscosity_scale,
-                                                                      Dij             = self.Dij,
-                                                                      offsets         = self.offsets)
+            lj_force, self.pp_pairlist, self.Dij, self.virial, self.pote = force.lennard_jones_hydro(frame           = self.frame,
+                                                                                                     nstlist         = self.lj_nstlist,
+                                                                                                     ref_pos         = self.w_universe,
+                                                                                                     conf_pos        = self.w_universe,
+                                                                                                     pbc_dim         = self.pbc_dim,
+                                                                                                     buffer_radius   = self.lj_buffer,
+                                                                                                     vdw_cutoff      = self.lj_cutoff,
+                                                                                                     pairlist        = self.pp_pairlist,
+                                                                                                     A12             = self.lj_A12,
+                                                                                                     B6              = self.lj_B6,
+                                                                                                     hydrodyn        = self.hydrodynamics,
+                                                                                                     cutoff_a        = self.cutoff_a,
+                                                                                                     cutoff_2a       = self.cutoff_2a,
+                                                                                                     viscosity_scale = self.viscosity_scale,
+                                                                                                     Dij             = self.Dij,
+                                                                                                     offsets         = self.offsets)
 
 
             #Calculate forces between particles
@@ -617,7 +622,7 @@ class Universe(base):
     def load_data_unwrap(self, block = None, skip = 1):
 
         try:
-            if self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
+            if self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1 and self.u_storage.shape[1] == self.N: return 0
         except: pass
 
         if type(block) == type(None): block = np.arange( self.N )
@@ -643,7 +648,6 @@ class Universe(base):
 
                 self.u_storage  = np.vstack( (self.u_storage, data[start_idx::skip, block, :] ))
                 self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
-
 
         #Validation
         assert self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1, "Number of frames is not correct!"
