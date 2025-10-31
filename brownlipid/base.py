@@ -24,7 +24,6 @@ class base:
                         softwall:                     bool = False,
                     bounce_scale:       Union[None, float] = None,
             checkpoint_structure:  Union[None, np.ndarray] = None,
-                   hydrodynamics:                     bool = False,
                        viscosity:                    float = 1,
                   random_domains:                     bool = False,
                diffusion_domains:                    float = 0.0,
@@ -49,7 +48,6 @@ class base:
         self.base_d_coeff         = base_d_coeff
         self.output               = output
         self.metropolis           = metropolis
-        self.hydrodynamics        = hydrodynamics
         self.bounce_scale         = bounce_scale
         self.viscosity            = viscosity
         self.external_forces      = external_forces
@@ -203,7 +201,10 @@ class base:
             elif 'Inside'     in self.metropolis.keys() and 'Barrier'     in self.metropolis.keys(): raise ValueError('Can handle either Inside or Barrier for Metropolis. But not both!')
 
             else: raise ValueError('Can not handle metropolis request!')
-        
+
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #Initialize for external forces
+
         #This parameter is needed later for initializing positions and must be defined also if no external forces are requested
         self.lj_sig = -1000
 
@@ -228,7 +229,6 @@ class base:
             print("Found the following LJ parameters:")
             print("Lipids - sigma/eps:", self.lj_sig, self.lj_eps )
             print("Domains - sigma/eps:", self.lj_sig_domains, self.lj_eps_domains )
-
 
             self.rmin           = self.lj_sig * 2**(1/6)
             self.rmin_domains   = self.lj_sig_domains * 2**(1/6)
@@ -274,7 +274,7 @@ class base:
             #Parameters for neighbour list generation
             self.lj_nstlist = external_forces['nstlist']
             
-            #Only squared sums are considerd later
+            #Only squared sums are considered later
             self.lj_cutoff  = external_forces['r_vdw']
             self.lj_buffer  = external_forces['r_list']
             
@@ -307,46 +307,6 @@ class base:
             print("Domains:", self.n_domains)
             print("Total:", self.N)
 
-            if self.hydrodynamics == True: 
-
-                print("Currently deprecated! Will exit!")
-                sys.exit()
-
-
-
-                self.cutoff_a  =  np.repeat( self.rmin, self.N_p_Domains ) 
-                self.cutoff_a[-self.n_domains:] = self.domain_radii - self.rmin
-                self.cutoff_2a = 2 * self.rmin
-                
-                self.Dij = np.ones( (self.N_p_Domains, self.N_p_Domains, 2, 2), dtype = np.float32 ) * np.nan
-
-                self.viscosity_scale        = (1.380649 * self.temp) / ( self.viscosity * np.pi )
-                self.domain_viscosity_scale = (1.380649 * self.temp) / ( self.viscosity * np.pi )
-
-                print("Requested hydrodynamics")
-                print("Inserted diffusion coefficients should not play a role anymore, only viscosity")
-
-                print("Viscosity scale factor for near and far field:",  self.viscosity_scale)
-                print("Cutoff a:", self.cutoff_a)
-
-                for i in range(self.N_p_Domains):
-
-                    self.Dij[i,i] = np.eye(2)  * self.viscosity_scale / (6 * self.cutoff_a[i])
-                
-                self.cutoff_a  =  self.rmin
-                self.cutoff_2a = 2 * self.rmin
-                
-                print("Self-diffusity term:")
-                print("Normal particle:")
-                print(self.Dij[0,0])
-                print("Domain:")
-                print(self.Dij[-1,-1])
-                
-
+        #----------------------------------------------------------------------------------------------------------------------------------------------
         #It is expected that no particle starts in a domain!
-        self.in_domains = np.zeros( self.N, dtype = bool ) 
-                
-
-
-
-    
+        self.in_domains = np.zeros( self.N, dtype = bool )

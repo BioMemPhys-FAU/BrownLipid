@@ -17,15 +17,15 @@ def test_diffusion_coefficient(L,d_coeff,N,nsteps,dt):
                              nstxout = 100,
                         base_d_coeff = d_coeff,
                              nstchk  = int(nsteps),
-                              output = "diffusion_test/output_D_{d_coeff:.3f}"
+                              output = f"diffusion_test/output_D_{d_coeff:.3f}"
                             )
 
     uni.evolve()
 
     tau, msd, sdpp = uni.mean_square_displacement()
 
-    np.save(arr = tau, file = 'tau_pytest.npy')
-    np.save(arr = msd, file = 'msd_pytest.npy')
+    np.save(arr = tau, file = 'diffusion_test/tau_pytest.npy')
+    np.save(arr = msd, file = 'diffusion_test/msd_pytest.npy')
 
     d_coeff_fit, intercept = uni.mean_square_displacement_fit(tau = tau, msd = msd, dim = 2, begin = 0., stop = 100000.)
 

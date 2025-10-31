@@ -73,7 +73,7 @@ def clean_domains(init_pos, geometry_collection, N, lj_sig, pbc_dim, hard_wall, 
             in_bound_idx = np.append( in_bound_idx, in_bound_idx_key )
         
         #--------------------------------------------------------------
-        #Resample particles that are spatially to close
+        #Resample particles that are spatially too close
         if lj_sig > 0:
 
             dist_mat, vec_mat = utils.distance_matrix_NxN(pos = cleaned_init_pos, N = N, pbc_dim = pbc_dim, offsets = offsets)

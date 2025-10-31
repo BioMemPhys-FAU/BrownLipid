@@ -18,7 +18,6 @@ from . import force
 from . import reflection
 from . import metropolis
 from . import clean
-from . import hydrodynamics
 
 class Universe(base):
 
@@ -94,12 +93,7 @@ class Universe(base):
             self.frame = i
             
             #Calculate forces from softwall bouncing (if applicable)
-            if self.softwall == True and len(self.pbc_dim[0]) < 2:
-
-                if self.hydrodynamics == True: 
-                    self.force_from_wall = utils.apply_soft_wall_force_hydro(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6, Dij= self.Dij, N = self.N)
-                else: 
-                    self.force_from_wall = utils.apply_soft_wall_force(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6)
+            if self.softwall == True and len(self.pbc_dim[0]) < 2: self.force_from_wall = utils.apply_soft_wall_force(pos = self.w_universe, hard_wall = self.hard_wall, lj_cutoff = self.lj_cutoff, lj_A12 = self.lj_A12, lj_B6 = self.lj_B6)
             
             #Move particles in time
             self.forward_in_time()
@@ -259,8 +253,8 @@ class Universe(base):
         The diffusion coefficients can vary between the particles, e.g., if a particle is trapped in a domain.
         """
         
-        #LJ + RANDOM (no hydrodynamics)
-        if any(self.external_forces) and not self.hydrodynamics:
+        #LJ + RANDOM
+        if any(self.external_forces):
         
             diff_dt = (self.d_coeffs * self.dt).reshape(-1, 1)
 
@@ -285,38 +279,6 @@ class Universe(base):
             #Calculate the displace vector
             self.displace = diff_dt * F / self.RT + factor * np.random.randn( self.N, 2 )
 
-        #HYDRODYNAMICS_LJ + RANDOM
-        elif any(self.external_forces) and self.hydrodynamics:
-
-            #Calculate forces between particles
-            lj_force, self.pp_pairlist, self.Dij, self.virial, self.pote = force.lennard_jones_hydro(frame           = self.frame,
-                                                                                                     nstlist         = self.lj_nstlist,
-                                                                                                     ref_pos         = self.w_universe,
-                                                                                                     conf_pos        = self.w_universe,
-                                                                                                     pbc_dim         = self.pbc_dim,
-                                                                                                     buffer_radius   = self.lj_buffer,
-                                                                                                     vdw_cutoff      = self.lj_cutoff,
-                                                                                                     pairlist        = self.pp_pairlist,
-                                                                                                     A12             = self.lj_A12,
-                                                                                                     B6              = self.lj_B6,
-                                                                                                     hydrodyn        = self.hydrodynamics,
-                                                                                                     cutoff_a        = self.cutoff_a,
-                                                                                                     cutoff_2a       = self.cutoff_2a,
-                                                                                                     viscosity_scale = self.viscosity_scale,
-                                                                                                     Dij             = self.Dij,
-                                                                                                     offsets         = self.offsets)
-
-
-            #Calculate forces between particles
-            F = self.dt * (lj_force[:self.N] + self.force_from_wall) / self.RT
-
-            #L = np.linalg.cholesky(self.Dij) 
-            L = hydrodynamics.numba_cholesky(a = self.Dij).astype(np.float32)
-            #Calculate the displace vector
-            R = hydrodynamics.get_R(L = L, N = self.N_p_Domains, dt = self.dt)[:self.N]
-
-            self.displace = F + R
-        
         #RANDOM
         else:
 

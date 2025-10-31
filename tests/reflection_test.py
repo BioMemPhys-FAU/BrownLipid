@@ -221,7 +221,7 @@ def test_heavy_calc_reflection_out(m):
     #d_norm = utils.apply_pbc_vector(vec = np.copy(d), pbc_dim = pbc_dim)
     d_norm = np.linalg.norm(d, axis = 1)
     
-    #np.testing.assert_allclose(d_norm < r, np.repeat(True, N-1))
+    #np.learning.assert_allclose(d_norm < r, np.repeat(True, N-1))
     
     #----------------------------------------------------
     #Calculate normals and intersection
@@ -311,7 +311,7 @@ def test_heavy_calc_reflection_in(m):
     #d_norm = utils.apply_pbc_vector(vec = np.copy(d), pbc_dim = pbc_dim)
     d_norm = np.linalg.norm(d, axis = 1)
     
-    #np.testing.assert_allclose(d_norm < r, np.repeat(True, N-1))
+    #np.learning.assert_allclose(d_norm < r, np.repeat(True, N-1))
     
     #----------------------------------------------------
     #Calculate normals and intersection

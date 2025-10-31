@@ -12,15 +12,6 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from numba import jit,prange
 
-@jit(nopython=True)
-def apply_offset(rij, rij_, offset):
-
-    real_rij_ = (rij_ - offset)
-    real_rij    = (real_rij_ / rij_) * rij
-
-    return real_rij, real_rij_
-
-
 def heaviside(x, threshold):
 
     """
@@ -106,56 +97,6 @@ def distance_matrix_NxN(pos, N, pbc_dim, offsets):
         vec_mat[ i, (i+1):, :] = ( rij_offset / rij_ ).reshape(-1, 1) * rij
 
     return dist_mat, vec_mat
-
-@jit(nopython=True)
-def distance_matrix_NxM(ref_pos, conf_pos, N, M, pbc_dim):
-
-    """
-    Calculate distance matrix between all possible pairs of particles in ref_pos and pos array.
-    This function is computational expensive, and for the sake of performance it should be called as rarley as possible.
-    However, increasing the call frequency could improve the accuracy of the simulation.
-    
-    Improvements taken from:
-    https://github.com/Allen-Tildesley/examples/blob/master/python_examples/md_lj_module.py
-
-    Parameters
-    ----------
-
-    ref_pos     := numpy.ndarray
-        Reference positional vector. Expects two-dimensional coordinates -> (N, 2)
-    conf_pos     := numpy.ndarray
-        Configuration positional vector. Expects two-dimensional coordinates -> (M, 2)
-    N       := int
-        Number of reference particles in the system. E.g. Brownian particles
-    M       := int
-        Number of configuration particles in the system. E.g. Domains
-    pbc_dim := tuple
-        First list contains index of dimensions along which PBC is applied. Second list contains length of box vector along which PBC is applied.
-
-    Returns
-    -------
-
-    vec_mat  := numpy.ndarray
-        Squared distances between particles.
-    dist_mat := numpy.ndarray
-        Distance vectors between particles.
-
-
-    """
-
-    #rij is the vector that points from (i+1) to i, or otherwise that points from j to i.
-    rij    = ref_pos[:, np.newaxis, :] - conf_pos[np.newaxis, :, :]
-
-    #Apply periodic boundary conditions
-    for k, size in zip(pbc_dim[0], pbc_dim[1]):
-        rij[:, :, k] = np.where(rij[:, :, k] >    size / 2, rij[:, :, k] - size, rij[:, :, k])
-        rij[:, :, k] = np.where(rij[:, :, k] <= - size / 2, rij[:, :, k] + size, rij[:, :, k])
-
-
-    #For the force calculation later only the squared distance is required, therefore the square root operation is omitted.
-    rij_ = np.sqrt( np.sum(rij**2,axis=2) )
-
-    return rij_, rij
 
 @jit(nopython=True)
 def apply_pbc_vector(vec, pbc_dim) -> np.ndarray:
@@ -280,48 +221,6 @@ def apply_soft_wall_force(pos, hard_wall, lj_cutoff, lj_A12, lj_B6):
     return force_from_wall
 
 @jit(nopython=True)
-def apply_soft_wall_force_hydro(pos, hard_wall, lj_cutoff, lj_A12, lj_B6, Dij, N):
-
-    """
-    Periodic boundary conditions for POSITIONAL VECTORS a.k.a. POINTS.
-
-    Particles leaving the box on one site, enter the box again from the opposite site.
-    Since, a simple rectangular box shape is used as unit cell the modulo operator is applied here.
-
-    """
-    
-    force_from_wall = np.zeros_like(pos, dtype=np.float32)
-
-    if not hard_wall[0]: return force_from_wall
-
-    for i, size in zip(hard_wall[0], hard_wall[1]):
-
-        # Distances from walls
-        ri = np.where(pos[:, i] > (size / 2), pos[:, i] - size, pos[:, i])
-
-        # Squared distances
-        ri_sq = ri ** 2
-
-        # Mask for particles within cutoff
-        lj_mask = (ri_sq <= lj_cutoff)
-
-        if not np.any(lj_mask): continue
-
-        # Lennard-Jones force calculation
-        inv_ri_sq = 1.0 / ri_sq[lj_mask]
-        
-        sr6 = inv_ri_sq ** 3
-        sr12 = sr6 ** 2
-        force = (lj_A12 * sr12 - lj_B6 * sr6) * inv_ri_sq
-
-        force_from_wall[lj_mask, i] += force * ri[lj_mask]
-        
-
-    for i in range(N): force_from_wall[i] = np.array([ np.sum(Dij[i,i][0] * force_from_wall[i]), np.sum(Dij[i,i][1] * force_from_wall[i]) ], dtype = np.float32 )
-
-    return force_from_wall
-
-@jit(nopython=True)
 def check_circ_cond(pos, mid, r, pbc_dim):
 
     """
@@ -345,58 +244,6 @@ def check_circ_cond(pos, mid, r, pbc_dim):
     circ_dist = np.sum(circ_coor**2, axis = 1)
 
     return np.where(circ_dist <= r)[0]
-
-@jit(nopython=True)
-def check_not_circ_cond(pos, mid, r, pbc_dim):
-
-    """
-    Check if a particle is within a circle.
-
-    Parameters
-    ----------
-    
-
-    """
-
-    assert mid.ndim == 2, 'Middle point is not two-dimensional'
-
-    circ_coor = pos - mid
-    #Apply periodic boundary conditions
-    for j, size in zip(pbc_dim[0], pbc_dim[1]):
-        circ_coor[:, j] = np.where(circ_coor[:, j] >    size / 2, circ_coor[:, j] - size, circ_coor[:, j])
-        circ_coor[:, j] = np.where(circ_coor[:, j] <= - size / 2, circ_coor[:, j] + size, circ_coor[:, j])
-
-
-    circ_dist = np.sum(circ_coor**2, axis = 1)
-
-    return np.where(circ_dist > r)[0]
-    
-
-@jit(nopython=True)
-def check_square_cond(self, pos, Lx, Ly, mid, pbc_dim): 
-    
-    assert mid.ndim == 2, 'Middle point is not two-dimensional'
-
-    squa_coor = (pos - mid)
-    #Apply periodic boundary conditions
-    for j, size in zip(pbc_dim[0], pbc_dim[1]):
-        squa_coor[:, j] = np.where(squa_coor[:, j] >    size / 2, squa_coor[:, j] - size, squa_coor[:, j])
-        squa_coor[:, j] = np.where(squa_coor[:, j] <= - size / 2, squa_coor[:, j] + size, squa_coor[:, j])
-
-    cond_x = np.logical_and( (-Lx/2 <= squa_coor[:, 0]), (squa_coor[:, 0] <= Lx/2) )
-    cond_y = np.logical_and( (-Ly/2 <= squa_coor[:, 1]), (squa_coor[:, 1] <= Ly/2) )
-
-    return np.where( np.logical_and(cond_x, cond_y))[0]
-
-
-@jit(nopython=True)
-def perpDot(a, b):
-    
-    a_vert = np.copy(a)
-    a_vert = np.flip(a_vert, axis = 1)
-    a_vert[:, 0] = -1 * a_vert[:, 0]
-
-    return np.dot(a_vert, b)
 
 def test_intersection(intersection, curr_points, prev_points, displace, pbc_dim):
 
