@@ -17,14 +17,6 @@ from . import utils
 import numpy as np
 from numba import jit
 
-@jit(nopython = True)
-def pressure(NRT, Vir, area):
-
-    p = ((NRT - Vir / 2) / area)
-    p *= (100/NA) #Richtige Skalierung
-
-    return p
-
 def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets):
 
     """

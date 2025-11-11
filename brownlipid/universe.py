@@ -9,8 +9,9 @@ from numba import jit
 import matplotlib.pyplot as plt
 
 #Progress bar
-from tqdm import tqdm 
+from tqdm import tqdm
 
+#from tests.utils_test import pbc_dim
 #Own modules
 from .base import base
 from . import utils
@@ -18,6 +19,7 @@ from . import force
 from . import reflection
 from . import metropolis
 from . import clean
+from . import pressure
 
 class Universe(base):
 
@@ -65,6 +67,8 @@ class Universe(base):
         f_inside   = np.zeros(  (nstchk_frames + 1, self.N), dtype = np.float32 )
         potEnergy  = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
         Virial     = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        Pressure   = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        Area       = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
         
         #Store initial frame
         w_storage[0] = self.w_universe
@@ -86,7 +90,7 @@ class Universe(base):
         #It starts at 1, because time step 0 is the initial distribution of the points in the universe.
         #It ends at self.nsteps + 1 to ensure that the requested time is reached
         for i in tqdm(range(1, self.nsteps + 1) ):
-            
+
             #-----------------------------------------------------------------------------------------------------------------
             #Evolve particle position
 
@@ -105,7 +109,10 @@ class Universe(base):
             
             #Apply hard boundaries (if applicable)
             self.hard_boundaries()
-            
+
+            #Apply pressure coupling
+            if self.pressure_coupling != False: self.pressure_coupling_step()
+
             #Apply periodic boundary conditions
             self.w_universe = self.apply_pbc(pos = self.w_universe)
 
@@ -137,6 +144,10 @@ class Universe(base):
                 potEnergy[  chk_frame_index ] = np.sum( self.pote )
                 Virial[     chk_frame_index ] = np.sum( self.virial )
 
+                if  self.pressure_coupling != False:
+                    Pressure[   chk_frame_index ] = self.p
+                    Area[       chk_frame_index ] = self.area
+
                 #If check pointing is requested then write current storage arrays to disk and renew them
                 if not i % self.nstchk:
                 
@@ -152,7 +163,10 @@ class Universe(base):
                     np.save( arr = f_inside  , file = self.output +   f"_f_inside.{chk_number.zfill(5)}" )
 
                     np.save( arr = potEnergy , file = self.output +   f"_potE.{chk_number.zfill(5)}" ) 
-                    np.save( arr = Virial    , file = self.output +   f"_Virial.{chk_number.zfill(5)}" ) 
+                    np.save( arr = Virial    , file = self.output +   f"_Virial.{chk_number.zfill(5)}" )
+
+                    np.save( arr = Pressure  , file = self.output +   f"_Pressure.{chk_number.zfill(5)}" )
+                    np.save( arr = Area      , file = self.output +   f"_Area.{chk_number.zfill(5)}" )
         
                     #Setup storage for positions -> Shape: (Number of frames in checkpoint file, Number of Particles, Number of dimensions)
                     w_storage  = np.zeros( ( nstchk_frames, self.N, 2 ), dtype = np.float32 )
@@ -465,6 +479,56 @@ class Universe(base):
             
     
         return np.array(index_after_metropolis), index[ A ]
+
+    #-----------------------------------------------------------------------------------------------------------------------------
+    #Pressure coupling
+
+    def pressure_coupling_step(self):
+
+        """
+        Function to apply simple pressure coupling.
+        Pressure of the system is calculated and used to calculate the rescaling factor for the pressure coupling.
+        Factor is applied to rescale the whole system and change its volume respectively.
+        Rescaling is applied equally in both dimensions!
+
+        Formula based on Berendsen isotropic pressure coupling:
+        scal_fac = 1 - compressibility * dt * (ref_p - p) / (3 * tau_p)
+
+
+        """
+
+        scal_fac, self.p, _ = pressure.scaling_factor(
+                                            ref_pos         = self.w_universe,
+                                            conf_pos        = self.w_universe,
+                                            pairlist        = self.pp_pairlist,
+                                            vdw_cutoff      = self.lj_cutoff,
+                                            pbc_dim         = self.pbc_dim,
+                                            offsets         = self.offsets,
+                                            A12             = self.lj_A12,
+                                            B6              = self.lj_B6,
+                                            N               = self.N,
+                                            NkT             = self.NkT,
+                                            area            = self.area,
+                                            dt              = self.dt,
+                                            ref_p           = self.ref_p,
+                                            compressibility = self.compressibility,
+                                            tau_p           = self.tau_p,
+                                            ext_force_check = self.ext_force_check,
+                                            thresh_p        = self.thresh_p)
+
+        self.w_universe *= scal_fac
+
+        self.size_x *= scal_fac
+        self.size_y *= scal_fac
+
+        self.area = self.size_x * self.size_y
+
+        #Update sizes in pbc_dim and hard_wall
+        if len(self.pbc_dim[1]) == 1: self.pbc_dim[1][0] = self.pbc_dim[1][0] * scal_fac
+        if len(self.pbc_dim[1]) == 2: self.pbc_dim[1][1] = self.pbc_dim[1][1] * scal_fac
+
+        if len(self.hard_wall[1]) == 1: self.hard_wall[1][0] = self.hard_wall[1][0] * scal_fac
+        if len(self.hard_wall[1]) == 2: self.hard_wall[1][1] = self.hard_wall[1][1] * scal_fac
 
     #-----------------------------------------------------------------------------------------------------------------------------
     #Boundaries

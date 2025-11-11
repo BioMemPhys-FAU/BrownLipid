@@ -18,7 +18,7 @@ class base:
                           nsteps:                      int = 5000,
                               dt:                    float = 1.0,
                          nstxout:                      int = 1,
-                          nstchk:                      int = 1, 
+                          nstchk:                      int = 1,
                     base_d_coeff:                    float = 1.,
                  hard_boundaries:                     dict = {},
                         softwall:                     bool = False,
@@ -30,6 +30,7 @@ class base:
                       metropolis:                     dict = {},
                  external_forces:                     dict = {},
                             temp:                    float = 298,
+               pressure_coupling:        Union[bool, dict] = {},
                           output:                      str = 'output'
 
                 ):
@@ -54,9 +55,11 @@ class base:
         self.temp                 = temp
         self.RT                   = 8.3145 * 1E-3 * self.temp
         self.NRT                  = N * self.RT
+        self.NkT                  = N * 1.38E-11 * self.temp #In mN * nm
         self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
         self.diffusion_domains    = diffusion_domains
         self.softwall             = softwall
+        self.pressure_coupling    = pressure_coupling
  
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
@@ -81,17 +84,17 @@ class base:
             if dim in pbc_dim:
                 if idx == 0: 
                     pbc_index.append(1)
-                    pbc_size.append( self.size_y )
+                    pbc_size.append( np.float64(self.size_y) )
                 else: 
                     pbc_index.append(0)
-                    pbc_size.append( self.size_x )
+                    pbc_size.append( np.float64(self.size_x) )
             else:
                 if idx == 0: 
                     hard_wall_index.append(1)
-                    hard_wall_size.append( self.size_y )
-                else: 
+                    hard_wall_size.append( np.float64(self.size_y) )
+                else:
                     hard_wall_index.append(0)
-                    hard_wall_size.append( self.size_x )
+                    hard_wall_size.append( np.float64(self.size_x) )
         
         self.pbc_dim   = (pbc_index, pbc_size)
         self.hard_wall = (hard_wall_index, hard_wall_size)                
@@ -310,3 +313,44 @@ class base:
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #It is expected that no particle starts in a domain!
         self.in_domains = np.zeros( self.N, dtype = bool )
+
+        #----------------------------------------------------------------------------------------------------------------------------------------------
+        #Initialize for pressure coupling
+
+        if self.pressure_coupling is True:
+
+            #Set default values
+            self.ref_p = 0                          #Reference pressure (tension) in mN/m
+            self.compressibility = 1/230            #Isothermal area compressibility in m/mN
+            self.tau_p = 0.001                      #Rate of pressure adjustment in ns
+            self.thresh_p = 0.005                   #Threshold for coupling to ref_p
+
+        elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
+
+            #Check for unknown keys
+            unknown = set(self.pressure_coupling) - {'ref_p', 'compressibility', 'tau_p', 'thresh_p'}
+            if unknown: raise KeyError(f"Unknown key(s) pressure_coupling: {unknown}")
+
+            # Set given values if present, otherwise set default values
+            for k, v in zip(['ref_p', 'compressibility', 'tau_p', 'thresh_p'], [1, 45.2472 * 1E-6, 0.001, 0.005]):
+
+                if k in self.pressure_coupling: setattr(self, k, self.pressure_coupling[k])
+                else: setattr(self, k, v)
+
+            if self.ref_p < 0 or self.compressibility < 0 or self.tau_p < 0:
+                raise ValueError("Pressure coupling parameters must be positive!")
+
+        #Disable pressure coupling when dict is empty or pressure_coupling is set as False
+        else: self.pressure_coupling = False
+
+        #Check for external forces and create variable needed for pressure coupling calculation
+        if any(self.external_forces): self.ext_force_check = True
+
+        else:
+            self.ext_force_check = False
+
+            #Parameters that need to be defined later for pressure.scaling_factor()
+            self.pp_pairlist = None
+            self.lj_cutoff = None
+            self.lj_A12 = None
+            self.lj_B6 = None
