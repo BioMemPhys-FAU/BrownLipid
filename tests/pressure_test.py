@@ -79,17 +79,17 @@ def test_pressure_adjustment(
         L=int(10),
         N=130,
         nsteps=int(1E5),
-        nstxout=int(1),
+        nstxout=int(500),
         dt=0.2,
         temp=298,
         ref_p=0,
         compressibility=1/300,
-        tau_p=0,
+        tau_p=10,
         thresh_p = 0.2,
         fit_start = 0.4,        #Fraction of total time
-        xlim = [0.15,1],         #[xl,xr] with Fraction of total time or False
+        xlim = [0,1],         #[xl,xr] with Fraction of total time or False
         ylim = True,             #y-scaling in the xlim interval
-        virialPlot = False      #either scal_fac or virial plot
+        virialPlot = False       #either scal_fac or virial plot
         ):
 
     nstchk = nsteps
@@ -203,7 +203,7 @@ def test_pressure_adjustment(
             if virialPlot:
                 axs[1, 1].set_ylim(min(Virial[xli:xri]), max(Virial[xli:xri]))
             else:
-                axs[1, 1].set_ylim(0.9999, 1.0001)
+                axs[1, 1].set_ylim(min(ScalFac[xli:xri]), max(ScalFac[xli:xri]))
 
     plt.suptitle(f'Parameters: {params}', fontsize=13)
     plt.tight_layout()
