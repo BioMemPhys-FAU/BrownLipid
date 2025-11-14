@@ -55,7 +55,7 @@ class base:
         self.temp                 = temp
         self.RT                   = 8.3145 * 1E-3 * self.temp
         self.NRT                  = N * self.RT
-        self.NkT                  = N * 1.38E-11 * self.temp #In mN * nm
+        self.NkT                  = N * 1.38 * self.temp #1E-23 J
         self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
         self.diffusion_domains    = diffusion_domains
         self.softwall             = softwall
@@ -320,7 +320,7 @@ class base:
         if self.pressure_coupling is True:
 
             #Set default values
-            self.ref_p = 0                          #Reference pressure (tension) in mN/m
+            self.ref_p = 7                          #Reference pressure (tension) in mN/m
             self.compressibility = 1/230            #Isothermal area compressibility in m/mN
             self.tau_p = 0.001                      #Rate of pressure adjustment in ns
             self.thresh_p = 0.005                   #Threshold for coupling to ref_p

@@ -68,7 +68,9 @@ class Universe(base):
         potEnergy  = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
         Virial     = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
         Pressure   = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        ScalFac    = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
         Area       = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        #Area[0] = self.area
         
         #Store initial frame
         w_storage[0] = self.w_universe
@@ -146,6 +148,7 @@ class Universe(base):
 
                 if  self.pressure_coupling != False:
                     Pressure[   chk_frame_index ] = self.p
+                    ScalFac[    chk_frame_index ] = self.scal_fac
                     Area[       chk_frame_index ] = self.area
 
                 #If check pointing is requested then write current storage arrays to disk and renew them
@@ -166,6 +169,7 @@ class Universe(base):
                     np.save( arr = Virial    , file = self.output +   f"_Virial.{chk_number.zfill(5)}" )
 
                     np.save( arr = Pressure  , file = self.output +   f"_Pressure.{chk_number.zfill(5)}" )
+                    np.save( arr = ScalFac   , file = self.output +   f"_ScalFac.{chk_number.zfill(5)}" )
                     np.save( arr = Area      , file = self.output +   f"_Area.{chk_number.zfill(5)}" )
         
                     #Setup storage for positions -> Shape: (Number of frames in checkpoint file, Number of Particles, Number of dimensions)
@@ -492,43 +496,39 @@ class Universe(base):
         Rescaling is applied equally in both dimensions!
 
         Formula based on Berendsen isotropic pressure coupling:
-        scal_fac = 1 - compressibility * dt * (ref_p - p) / (3 * tau_p)
+        linear:         scaling_factor = 1 + (compressibility * dt * (p - ref_p) / (3 * tau_p))
+        exponential:    scaling_factor = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1/3)
 
 
         """
 
-        scal_fac, self.p, _ = pressure.scaling_factor(
-                                            ref_pos         = self.w_universe,
-                                            conf_pos        = self.w_universe,
-                                            pairlist        = self.pp_pairlist,
-                                            vdw_cutoff      = self.lj_cutoff,
-                                            pbc_dim         = self.pbc_dim,
-                                            offsets         = self.offsets,
-                                            A12             = self.lj_A12,
-                                            B6              = self.lj_B6,
-                                            N               = self.N,
+        self.scal_fac, self.p = pressure.scaling_factor(
                                             NkT             = self.NkT,
                                             area            = self.area,
                                             dt              = self.dt,
+                                            virial          = self.virial,
                                             ref_p           = self.ref_p,
                                             compressibility = self.compressibility,
                                             tau_p           = self.tau_p,
-                                            ext_force_check = self.ext_force_check,
                                             thresh_p        = self.thresh_p)
 
-        self.w_universe *= scal_fac
+        self.w_universe *= self.scal_fac
 
-        self.size_x *= scal_fac
-        self.size_y *= scal_fac
+        self.size_x *= self.scal_fac
+        self.size_y *= self.scal_fac
 
-        self.area = self.size_x * self.size_y
+        self.area *= self.scal_fac**2
 
         #Update sizes in pbc_dim and hard_wall
-        if len(self.pbc_dim[1]) == 1: self.pbc_dim[1][0] = self.pbc_dim[1][0] * scal_fac
-        if len(self.pbc_dim[1]) == 2: self.pbc_dim[1][1] = self.pbc_dim[1][1] * scal_fac
+        if len(self.pbc_dim[1]) == 1: self.pbc_dim[1][0] *= self.scal_fac
+        if len(self.pbc_dim[1]) == 2:
+            self.pbc_dim[1][0] *= self.scal_fac
+            self.pbc_dim[1][1] *= self.scal_fac
 
-        if len(self.hard_wall[1]) == 1: self.hard_wall[1][0] = self.hard_wall[1][0] * scal_fac
-        if len(self.hard_wall[1]) == 2: self.hard_wall[1][1] = self.hard_wall[1][1] * scal_fac
+        if len(self.hard_wall[1]) == 1: self.hard_wall[1][0] *= self.scal_fac
+        if len(self.hard_wall[1]) == 2:
+            self.hard_wall[1][0] *= self.scal_fac
+            self.hard_wall[1][1] *= self.scal_fac
 
     #-----------------------------------------------------------------------------------------------------------------------------
     #Boundaries
