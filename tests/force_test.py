@@ -218,8 +218,12 @@ def test_calculate_force_basic_symmetry():
     lj_A12 = 1.0
     lj_B6 = 1.0
 
+    # Correction parameters needed
+    area = 1
+    E_lrc_const = 0
+
     # Calculate forces
-    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
+    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, area, E_lrc_const, lj_A12, lj_B6, masked_pairlist)
 
     # Check force magnitude is equal
     np.testing.assert_almost_equal(
@@ -250,8 +254,12 @@ def test_calculate_force_no_interaction():
     lj_A12 = 1.0
     lj_B6 = 1.0
 
+    # Correction parameters needed
+    area = 1
+    E_lrc_const = 0
+
     # Calculate forces
-    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
+    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, area, E_lrc_const, lj_A12, lj_B6, masked_pairlist)
 
     # Check forces are essentially zero
     np.testing.assert_array_almost_equal(force_per_particle, np.zeros((N, 2)))
@@ -281,9 +289,13 @@ def test_calculate_force_multiple_pairs():
     # Lennard-Jones parameters
     lj_A12 = 1.0
     lj_B6 = 1.0
+
+    # Correction parameters needed
+    area = 1
+    E_lrc_const = 0
     
     # Calculate forces
-    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist)
+    force_per_particle, _, _ = force.calculate_force(rij, rij_sq, N, area, E_lrc_const, lj_A12, lj_B6, masked_pairlist)
     
     # Verify total number of particles
     assert force_per_particle.shape == (N, 2)
@@ -304,6 +316,10 @@ def test_calculate_force_values():
 
     N = int(1E2)
 
+    #No long-range correction
+    area = 1
+    E_lrc_const = 0
+
     #Get random data in a reasonable distance
     rij      = 1.1*np.random.rand(N, 2).astype(np.float32) + 0.8
     rij_norm = 1.1*np.random.rand(N, 1).astype(np.float32) + 0.8
@@ -315,7 +331,7 @@ def test_calculate_force_values():
     masked_pairlist = np.array( np.split( np.arange(int(2 * N)), int(N)) )
 
     #Call force kernel to get values from the BrownLipid program
-    y_pred, y_virial_pred, y_pote_pred = force.calculate_force(rij, rij_sq, N = int(2 * N), lj_A12 = lj_A12, lj_B6= lj_B6, masked_pairlist=masked_pairlist)
+    y_pred, y_virial_pred, y_pote_pred = force.calculate_force(rij, rij_sq, N = int(2 * N), area = area, E_lrc_const = E_lrc_const, lj_A12 = lj_A12, lj_B6= lj_B6, masked_pairlist=masked_pairlist)
     
     #Call naive function to get ground truth values
     y_true                             = naive_force( r = rij_norm, sig = lj_sig, eps = lj_eps)      * rij/rij_norm
@@ -389,7 +405,11 @@ def test_lennard_kernel():
 
     offsets = np.zeros((6, 6))
 
-    force_per_particle, pairlist, virial, pote = force.lennard_jones(frame = frame, nstlist = nstlist, ref_pos = pos, conf_pos = pos, pbc_dim = pbc_dim, buffer_radius = buffer_radius, vdw_cutoff = vdw_cutoff, pairlist = pairlist, A12 = lj_A12, B6 = lj_B6, offsets = offsets)
+    #No long-range correction
+    area = 1
+    E_lrc_const = 0
+
+    force_per_particle, pairlist, virial, pote = force.lennard_jones(frame = frame, nstlist = nstlist, ref_pos = pos, conf_pos = pos, pbc_dim = pbc_dim, area = area, E_lrc_const = E_lrc_const, buffer_radius = buffer_radius, vdw_cutoff = vdw_cutoff, pairlist = pairlist, A12 = lj_A12, B6 = lj_B6, offsets = offsets)
 
     pairlist_true = np.array([ [0, 1],
                                [0, 3],
@@ -490,7 +510,11 @@ def test_lennard_kernel_different():
 
     offsets = np.zeros((6, 6))
 
-    force_per_particle, pairlist, virial, pote = force.lennard_jones(frame = frame, nstlist = nstlist, ref_pos = pos, conf_pos = pos, pbc_dim = pbc_dim, buffer_radius = buffer_radius, vdw_cutoff = vdw_cutoff, pairlist = pairlist, A12 = lj_A12, B6 = lj_B6, offsets = offsets)
+    #No long-range correction
+    area = 1
+    E_lrc_const = 0
+
+    force_per_particle, pairlist, virial, pote = force.lennard_jones(frame = frame, nstlist = nstlist, ref_pos = pos, conf_pos = pos, pbc_dim = pbc_dim, area = area, E_lrc_const = E_lrc_const, buffer_radius = buffer_radius, vdw_cutoff = vdw_cutoff, pairlist = pairlist, A12 = lj_A12, B6 = lj_B6, offsets = offsets)
 
     pairlist_true = np.array([ [0, 1],
                                [0, 3],

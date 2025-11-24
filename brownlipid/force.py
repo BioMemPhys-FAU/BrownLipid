@@ -17,7 +17,7 @@ from . import utils
 import numpy as np
 from numba import jit
 
-def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets):
+def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, area, E_lrc_const, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets):
 
     """
     Compute the Lennard-Jones forces acting on each particle in the system.
@@ -71,6 +71,8 @@ def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw
     force_per_particle, virial, pote = calculate_force(rij             = effective_rij,
                                                        rij_sq          = effective_rij_sqrt**2,
                                                        N               = ref_pos.shape[0],
+                                                       area            = area,
+                                                       E_lrc_const     = E_lrc_const,
                                                        lj_A12          = A12[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
                                                        lj_B6           = B6[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
                                                        masked_pairlist = masked_pairlist)
@@ -80,12 +82,12 @@ def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, buffer_radius, vdw
 
 @jit(nopython=True)
 def \
-        calculate_force(rij, rij_sq, N, lj_A12, lj_B6, masked_pairlist):
+        calculate_force(rij, rij_sq, N, area, E_lrc_const, lj_A12, lj_B6, masked_pairlist):
 
     """
     Core function for force calculation.
 
-    The function calculate the pair-wise additive forces between particles derived from a Lennard-Jones potential
+    The function calculates the pair-wise additive forces between particles derived from a Lennard-Jones potential
 
         V(r) = 4 * eps * ( (sig/r)^12 - (sig/r)^6 )         (1)
 
@@ -100,13 +102,16 @@ def \
         Squared distances between particle j and i.
     N               := int
         Number of particles in the system.
+    area            := float
+        Area of the simulation box.
+    E_lrc_const     := float
+        Constant part of the long-range correction.
     lj_A12          := float
         Lennard Jones parameter for the repulsive part. User-defined.
     lj_B6           := float
         Lennard Jones parameter for the attractive part. User-defined.
     masked_pairlist := numpy.ndarray
         Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
-
 
     """
     
@@ -122,6 +127,10 @@ def \
 
     #Calculate potential energy
     pote       = (sr12 / 2 - sr6 ) / 6
+
+    #Calculate and apply 2D long-range correction
+    E_lrc = E_lrc_const / area
+    pote += E_lrc
 
     #Calculate the virial
     virial     = (sr12 - sr6 )
@@ -158,14 +167,12 @@ def generate_pairlist(dist_mat, vec_mat, lj_buffer):
     Parameters
     ----------
 
-    pos       := numpy.ndarray
-        Position of the particles. Expected are 2-dimensional positions.
-    pbc_dim   := tuple
-        Contains two list. The first list contains indices of axes with PBC. The second list contains the length of the corresponding axes.
+    dist_mat  := numpy.ndarray
+        Distances for all unique pairs of particles.
+    vec_mat   := numpy.ndarray
+         Distance vectors for all unique pairs of particles.
     lj_buffer := float
         Outer cutoff. Particle pairs with a distance below lj_buffer are stored in the pairlist. User-defined.
-    lj_cutoff := float
-        Inner cutoff or VdW cutoff. Particle pairs with a distance below lj_cufoff are used for force calculation. User-defined.
 
     Returns
     -------
@@ -173,8 +180,6 @@ def generate_pairlist(dist_mat, vec_mat, lj_buffer):
         Distance vectors of unique particles pairs with a distance below lj_cutoff.
     rij_sq   := numpy.ndarray
         Distances between unique particles pairs with a distance below lj_cutoff.
-    mask     := numpy.ndarray
-        Boolean mask for pairlist. Maps to unique particle pairs with a distance below lj_cutoff.
     pairlist := numpy.ndarray
         Array containing unique particles pairs with a distance below lj_buffer.
 
@@ -226,8 +231,6 @@ def update_pairlist(ref_pos, conf_pos, pairlist, pbc_dim, offsets):
         Full pairlist. Contains unique particle pairs that had a distance below lj_buffer during its generation.
     pbc_dim   := tuple
         Contains two list. The first list contains indices of axes with PBC. The second list contains the length of the corresponding axes.
-    lj_cutoff := float
-        Inner cutoff or VdW cutoff. Particle pairs with a distance below lj_cufoff are used for force calculation. User-defined.
 
     Returns
     -------    
@@ -235,8 +238,6 @@ def update_pairlist(ref_pos, conf_pos, pairlist, pbc_dim, offsets):
         Distance vectors of unique particles pairs with a distance below lj_cutoff.
     rij_sq   := numpy.ndarray
         Distances between unique particles pairs with a distance below lj_cutoff.
-    mask     := numpy.ndarray
-        Boolean mask for pairlist. Maps to unique particle pairs with a distance below lj_cutoff.
 
     """
 

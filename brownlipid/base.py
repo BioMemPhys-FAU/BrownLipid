@@ -280,6 +280,9 @@ class base:
             #Only squared sums are considered later
             self.lj_cutoff  = external_forces['r_vdw']
             self.lj_buffer  = external_forces['r_list']
+
+            #Precalculate constant part of long-range correction
+            self.E_lrc_const = self.N**2 * np.pi * self.lj_eps * self.lj_sig**2 * (0.4 * (self.lj_sig / self.lj_cutoff)**10 - (self.lj_sig / self.lj_cutoff)**4)
             
             #Init empty pairlist -> Will be changed in the first step of the simulations
             self.pp_pairlist = np.array([])
@@ -323,7 +326,7 @@ class base:
             self.ref_p = 7                          #Reference pressure (tension) in mN/m
             self.compressibility = 1/230            #Isothermal area compressibility in m/mN
             self.tau_p = 0.001                      #Rate of pressure adjustment in ns
-            self.thresh_p = 0.005                   #Threshold for coupling to ref_p
+            self.thresh_p = 1e-16                   #Threshold for coupling to ref_p
 
         elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
 
@@ -343,14 +346,10 @@ class base:
         #Disable pressure coupling when dict is empty or pressure_coupling is set as False
         else: self.pressure_coupling = False
 
-        #Check for external forces and create variable needed for pressure coupling calculation
-        if any(self.external_forces): self.ext_force_check = True
+        #Precalculate constant part of long-range correction
+        if self.pressure_coupling != False:
 
-        else:
-            self.ext_force_check = False
+            if any(external_forces):
+                self.p_lrc_const = 12 * N**2 * np.pi * self.lj_eps * self.lj_sig**2 * (0.2 * (self.lj_sig / self.lj_cutoff)**10 - 0.25 * (self.lj_sig / self.lj_cutoff)**4)
 
-            #Parameters that need to be defined later for pressure.scaling_factor()
-            self.pp_pairlist = None
-            self.lj_cutoff = None
-            self.lj_A12 = None
-            self.lj_B6 = None
+            else : self.p_lrc_const = 0

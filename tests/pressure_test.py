@@ -3,6 +3,7 @@ from PIL.ImageOps import posterize
 import brownlipid
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy
 import pytest
 
 from brownlipid import pressure
@@ -16,27 +17,42 @@ def test_pressure_zero_virial():
     N = 4
     temp = 298
     area = 2
-    NkT = N * 1.38E-11 * temp  # In mN * nm
+    NkT = N * 1.38 * temp  # In mN * nm
     virial = np.zeros(N)
+    p_lrc_const = 0
 
     p_expected = ((N * 1.38E-23 * temp) / area) * 1E21
 
-    np.testing.assert_allclose(pressure.pressure(virial, NkT, area), p_expected, rtol = 0, atol = 1E-2)
+    np.testing.assert_allclose(pressure.pressure(virial, NkT, area, p_lrc_const), p_expected, rtol = 0, atol = 1E-2)
 
 def test_pressure_simple_virial():
     N = 3
     temp = 298
     area = 2
-    NkT = N * 1.38E-11 * temp  # In mN * nm
+    NkT = N * 1.38 * temp #1E-23 J
     virial = np.array([1,5,3], dtype = np.float32)
+    p_lrc_const = 0
 
-    p_expected = np.float32(((N * 1.38E-23 * temp) / area + 9 * 6.022E-20 / (2 * area)) * 1E21)
+    p_expected = np.float32((N * 1.38E-2 * temp) / area + (9 / 6.022) * 10 / (2 * area))
 
-    np.testing.assert_allclose(pressure.pressure(virial, NkT, area), p_expected, rtol = 0, atol = 1E-2)
+    np.testing.assert_allclose(pressure.pressure(virial, NkT, area, p_lrc_const), p_expected, rtol = 0, atol = 1E-2)
+
+def test_pressure_simple_virial_with_correction():
+    N = 3
+    temp = 298
+    area = 2
+    NkT = N * 1.38 * temp #1E-23 J
+    virial = np.array([1,5,3], dtype = np.float32)
+    p_lrc_const = -0.2
+
+    p_expected = np.float32((N * 1.38E-2 * temp) / area + (9 / 6.022) * 10 / (2 * area))
+    p_expected += - 1/6.022 * 10 * 0.2 / 4
+
+    np.testing.assert_allclose(pressure.pressure(virial, NkT, area, p_lrc_const), p_expected, rtol = 0, atol = 1E-2)
 
 
 #---------------------------------------------------------------------------------------------------------------------
-#Tests for scaling_factor()
+#Test for scaling_factor()
 
 def test_scaling_calc():
 
@@ -55,8 +71,8 @@ def test_scaling_calc():
         p = np.random.uniform(ref_p + 0.01, high)
 
         #From pressure.py, to be tested:
-        #scal_fac = 1 + (compressibility * dt * (p - ref_p) / (3 * tau_p))          #Linear: handles pressure up to ~3.4E4
-        scal_fac = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1 / 3)    #Exponential: handles pressure up to ~1.1E4
+        #scal_fac = 1 + (compressibility * dt * (p - ref_p) / (2 * tau_p))          #Linear equation can handle higher pressure values
+        scal_fac = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1 / 2)
 
         assert scal_fac > 0, 'invalid scaling factor'
         assert scal_fac > 1, f'scaling factor <1 although pressure is too high \n p={p}, ref_p={ref_p}, scal_fac={scal_fac}'
@@ -68,32 +84,42 @@ def test_scaling_calc():
         p = np.random.uniform(0,ref_p - 0.01)
 
         #From pressure.py, to be tested:
-        #scal_fac = 1 + (compressibility * dt * (p - ref_p) / (3 * tau_p))          #Linear: handles pressure up to ~3.4E4
-        scal_fac = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1 / 3)    #Exponential: handles pressure up to ~1.1E4
+        #scal_fac = 1 + (compressibility * dt * (p - ref_p) / (2 * tau_p))          #Linear equation can handle higher pressure values
+        scal_fac = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1 / 2)
 
         assert scal_fac > 0, 'invalid scaling factor'
         assert scal_fac < 1, f'scaling factor >1 although pressure is too low \n p={p}, ref_p={ref_p}, scal_fac={scal_fac}'
 
 
+#---------------------------------------------------------------------------------------------------------------------
+#Tests for pressure coupling
+
 def test_pressure_adjustment(
-        L=int(10),
+        L=int(18),
         N=130,
-        nsteps=int(1E5),
-        nstxout=int(500),
-        dt=0.2,
+        nsteps=int(1E7),
+        nstxout=int(1000),
+        dt=5e-5,
         temp=298,
-        ref_p=0,
-        compressibility=1/300,
-        tau_p=10,
-        thresh_p = 0.2,
-        fit_start = 0.4,        #Fraction of total time
-        xlim = [0,1],         #[xl,xr] with Fraction of total time or False
-        ylim = True,             #y-scaling in the xlim interval
-        virialPlot = False       #either scal_fac or virial plot
+        external_forces={'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':2.0, 'nstlist':10, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
+        ref_p=1.92,
+        compressibility=4.5e-5,
+        tau_p=1E2,
+        thresh_p = 1E-16,
+        fit_start = 0.45,       #fraction of total time
+        test_tol = 1.8,
+        xlim = [],              #[xl,xr] with Fraction of total time or False
+        ylim = True,            #y-scaling in the xlim interval
+        virialPlot = True,      #either scal_fac or virial plot
+        correlation = False,
+        t_equ = 200             #for correlation
         ):
 
     nstchk = nsteps
     assert nsteps % nstchk == 0, 'nsteps must be divisible by nstchk'
+
+    if correlation:
+        assert t_equ < dt * nsteps, 't_equ must be smaller than the total simulation time'
 
     uni = brownlipid.Universe(
                                 size_x=L,
@@ -104,15 +130,16 @@ def test_pressure_adjustment(
                                 temp=temp,
                                 nstxout=nstxout,
                                 base_d_coeff=248.916E-6,
-                                #hard_boundaries={"Circle": [[np.inf, 1.0, 2.5, 2.5]]},
-                                #diffusion_domains=0.0,
                                 nstchk=nstchk,
                                 output='pressure_test/output',
-                                external_forces={'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':2, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
+                                external_forces=external_forces,
                                 pressure_coupling={'ref_p': ref_p, 'compressibility': compressibility, 'tau_p': tau_p, 'thresh_p': thresh_p}
                             )
 
     uni.evolve()
+
+    p_lrc_const = 12 * N**2 * np.pi * external_forces['epsilon'] * external_forces['sigma']**2 * (0.2 * (external_forces['sigma'] / external_forces['r_vdw'])**10 - 0.25 * (external_forces['sigma'] / external_forces['r_vdw'])**4)
+    print('Constant part of long-range correction for pressure:', p_lrc_const / 6.022, '* 1e-35 mN * m^3')
 
     Pressure = np.load(f'pressure_test/output_Pressure.{1:05d}.npy')[1:]
     Area     = np.load(f'pressure_test/output_Area.{1:05d}.npy')[1:]
@@ -136,7 +163,7 @@ def test_pressure_adjustment(
     print(f'Pressure RMSD after fit threshold: {Pressure_rmsd_fit:.3f} mN/m')
 
     #Plotting
-    params = f'L = {L}, N = {N}, ref_p = {ref_p}, compressibility = {compressibility:.3g}, tau_p = {tau_p}, thresh_p = {thresh_p}, nstxout = {nstxout}'
+    params = f'L = {L}, N = {N}, ref_p = {ref_p}, compressibility = {compressibility:.3g}, tau_p = {tau_p:.3g}, thresh_p = {thresh_p}, dt = {dt:.3g}, nstxout = {nstxout}'
 
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(13, 8))
 
@@ -170,9 +197,9 @@ def test_pressure_adjustment(
 
     if virialPlot:
         #Virial plot
-        axs[1,1].plot(x, Virial, label='Virial')
+        axs[1,1].plot(x, Virial, label='Virial (not LR-corrected)')
         axs[1,1].set_xlabel('Time in ns')
-        axs[1,1].set_ylabel('Energy in kJ/mol')
+        axs[1,1].set_ylabel('Virial in kJ/mol')
         axs[1,1].grid(True)
         axs[1,1].legend()
 
@@ -210,24 +237,120 @@ def test_pressure_adjustment(
     fig.savefig(f'pressure_test/pressure_adjustment.png', dpi=300)
     plt.show()
 
-    np.testing.assert_allclose(b_p, ref_p, atol=1.8)
 
+    #Correlation
+    if correlation:
+        assert t_equ < dt * nsteps, 't_equ must be smaller than the total simulation time'
+
+        Pressure = np.load(f'pressure_test/output_Pressure.{1:05d}.npy')[int(t_equ // dt // nstxout) + 1:]
+        Area = np.load(f'pressure_test/output_Area.{1:05d}.npy')[int(t_equ // dt // nstxout) + 1:]
+        n_p = len(Pressure)
+
+        #Get the centered arrays
+        mean_p = np.mean(Pressure)
+        Pressure -= mean_p
+        mean_a = np.mean(Area)
+        Area -= mean_a
+
+        #Calculate correlation, normalize it and extract for positive lags
+        cor_pp = np.correlate(Pressure,Pressure,mode='full')
+        if min(cor_pp) == 0 and max(cor_pp) == 0: cor_pp_filt = np.zeros(len(cor_pp[n_p - 1:]))
+        else:
+            cor_pp_norm = cor_pp / cor_pp[n_p - 1]
+            cor_pp_filt = cor_pp_norm[n_p - 1:]
+
+        cor_pa = np.correlate(Pressure,Area,mode='full')
+        if min(cor_pa) == 0 and max(cor_pa) == 0: cor_pa_filt = np.zeros(len(cor_pa[n_p - 1:]))
+        else: cor_pa_filt = cor_pa[n_p - 1:] / np.sqrt(np.sum(Pressure**2) * np.sum(Area**2))
+
+        #Plotting
+        Pressure = np.load(f'pressure_test/output_Pressure.{1:05d}.npy')[1:]
+        Area = np.load(f'pressure_test/output_Area.{1:05d}.npy')[1:]
+        fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(13, 8), dpi=300)
+        tau = np.linspace(0, (n_p - 1) * dt * nstxout, n_p)
+        t = np.linspace(0, nsteps * dt, int(nstchk / nstxout))
+
+        axs[0,0].scatter(tau,cor_pp_filt, s=5, c='C0', label='Pressure Autocorrelation')
+        axs[0,0].plot(tau,cor_pp_filt, c='orange', alpha=0.35)
+        axs[0,0].set_xlabel('Time lag in ns')
+        axs[0,0].set_ylabel('Normalized Autocorrelation')
+        axs[0,0].grid(True)
+
+        axs[1,0].plot(t, Pressure, label='Pressure')
+        axs[1,0].set_xlabel('Time in ns')
+        axs[1,0].set_ylabel('Pressure in mN/m')
+        axs[1,0].grid(True)
+
+        axs[0,1].scatter(tau,cor_pa_filt, s=5, c='C0', label='Pressure Area Correlation')
+        axs[0,1].plot(tau,cor_pa_filt, c='orange', alpha=0.35)
+        axs[0,1].set_xlabel('Time lag in ns')
+        axs[0,1].set_ylabel('Normalized Crosscorrelation')
+        axs[0,1].grid(True)
+
+        axs[1,1].plot(t, Area, label='Area')
+        axs[1,1].set_xlabel('Time in ns')
+        axs[1,1].set_ylabel('Area in nm^2')
+        axs[1,1].grid(True)
+
+        #Fit A(tau)=a*e**(tau/tau _c)+c
+        def simpleExp(tau, tau_c, a, c):
+            return a * np.exp(-tau / tau_c) + c
+
+        params, cv = scipy.optimize.curve_fit(f=simpleExp, xdata=tau, ydata=cor_pp_filt, p0=[10*dt*nstxout,1,0])
+        tau_c, a, c = params
+        axs[0,0].plot(tau, simpleExp(tau, tau_c, a, c), c='r', label=f'Fit: A(tau) = {a:.2f}*e^(-tau/{tau_c:.2f})+{c:.2f}', ls='--')
+
+        axs[1,0].plot(np.ones(2)*(tau_c+t_equ), np.linspace(min(Pressure), max(Pressure),2), alpha=0.8, label='tau_c', ls='-.')
+        axs[1,0].plot(np.ones(2)*t_equ, np.linspace(min(Pressure), max(Pressure),2), alpha=0.8, label='t_equ', ls='--')
+        axs[1,1].plot(np.ones(2)*t_equ, np.linspace(min(Area), max(Area),2), alpha=0.8, c ='g', label='t_equ', ls='--')
+
+        #Set plot limits
+        if xlim:
+            xlcut = nsteps * dt * xlim[0]
+            xrcut = nsteps * dt * xlim[1]
+            xlcut_c = (nsteps * dt - t_equ) * xlim[0]
+            xrcut_c = (nsteps * dt - t_equ) * xlim[1]
+            axs[0, 0].set_xlim(xlcut_c, xrcut_c)
+            axs[0, 1].set_xlim(xlcut_c, xrcut_c)
+            axs[1, 0].set_xlim(xlcut, xrcut)
+            axs[1, 1].set_xlim(xlcut, xrcut)
+            if ylim:
+                xli = int(xlcut / dt / nstxout)
+                xri = int(xrcut / dt / nstxout)
+                xli_c = int(xlim[0] * n_p)
+                xri_c = int(xlim[1] * n_p)
+                axs[1,0].set_ylim(min(Pressure[xli:xri]), max(Pressure[xli:xri]))
+                axs[1,1].set_ylim(min(Area[xli:xri]), max(Area[xli:xri]))
+                axs[0,0].set_ylim(min(cor_pp_filt[xli_c:xri_c]), max(cor_pp_filt[xli_c:xri_c]))
+                axs[0,1].set_ylim(min(cor_pa_filt[xli_c:xri_c]), max(cor_pa_filt[xli_c:xri_c]))
+
+        params = f'L = {L}, N = {N}, ref_p = {ref_p}, compressibility = {compressibility:.3g}, tau_p = {tau_p:.3g}, tau_equ = {t_equ}, dt = {dt:.3g}, nstxout = {nstxout}'
+        plt.suptitle(f'{params}', fontsize=13)
+        axs[0,0].legend()
+        axs[0,1].legend()
+        axs[1,0].legend()
+        axs[1,1].legend()
+        plt.tight_layout()
+        plt.show()
+
+        print('tau_c = ', tau_c, 'ns')
+
+    np.testing.assert_allclose(b_p, ref_p, atol=test_tol)
 
 
 def test_pos_visual(
-        L=int(10),
+        L=int(18),
         N=130,
         nsteps=int(100),
         nstxout=int(1),
         nstchk=int(4),
-        dt=0.2,
+        dt=1e-2,
         temp=298,
         ref_p=0,
         compressibility=1/300,
         tau_p=10,
         pressure_plot = True
         ):
-
 
     assert nsteps % nstchk == 0, 'nsteps must be divisible by nstchk'
 
@@ -240,11 +363,9 @@ def test_pos_visual(
                                 temp=temp,
                                 nstxout=nstxout,
                                 base_d_coeff=248.916E-6,
-                                #hard_boundaries={"Circle": [[np.inf, 1.0, 2.5, 2.5]]},
-                                #diffusion_domains=0.0,
                                 nstchk=nstchk,
                                 output='pressure_test/output',
-                                external_forces={'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':2, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
+                                external_forces={'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 99, 'r_list':100, 'nstlist':2, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
                                 pressure_coupling={'ref_p': ref_p, 'compressibility': compressibility, 'tau_p': tau_p}
                             )
 
@@ -253,9 +374,6 @@ def test_pos_visual(
     Pressure = np.load(f'pressure_test/output_Pressure.{1:05d}.npy')[1:]
     Area     = np.load(f'pressure_test/output_Area.{1:05d}.npy')
     Area[0]  = L**2
-    potE     = np.load(f'pressure_test/output_potE.{1:05d}.npy')
-    Virial   = np.load(f'pressure_test/output_Virial.{1:05d}.npy')
-    ScalFac  = np.load(f'pressure_test/output_ScalFac.{1:05d}.npy')
 
     Pos = np.load(f'pressure_test/output_wrap.{1:05d}.npy')
     xpos = Pos[:,:,0]
@@ -290,3 +408,133 @@ def test_pos_visual(
     plt.suptitle(f'Parameters: {params}', fontsize=13)
     plt.tight_layout()
     plt.show()
+
+    print(f'Pressure at start: {Pressure[0]:.8f} mN/m')
+
+
+def test_correlation(
+        L=int(18),
+        N=130,
+        nsteps=int(5E4),
+        nstxout=int(10),
+        dt=5e-5,
+        temp=298,
+        ref_p=0,
+        compressibility=4.5e-5,
+        tau_p=1E2,
+        t_equ = 2,
+        xlim = [],         #[xl,xr] with Fraction of total time or False
+        ylim = True
+        ):
+
+    nstchk = nsteps
+
+    uni = brownlipid.Universe(
+        size_x=L,
+        size_y=L,
+        N=N,
+        nsteps=nsteps,
+        dt=dt,
+        temp=temp,
+        nstxout=nstxout,
+        base_d_coeff=248.916E-6,
+        nstchk=nstchk,
+        output='pressure_test/output',
+        external_forces={'epsilon': 0.3221, 'sigma': 0.7706, 'r_vdw': 1.2, 'r_list':3.0, 'nstlist':2, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
+        pressure_coupling={'ref_p': ref_p, 'compressibility': compressibility, 'tau_p': tau_p}
+    )
+
+    uni.evolve()
+
+    Pressure = np.load(f'pressure_test/output_Pressure.{1:05d}.npy')[int(t_equ // dt // nstxout) + 1:]
+    Area = np.load(f'pressure_test/output_Area.{1:05d}.npy')[int(t_equ // dt // nstxout) + 1:]
+    n_p = len(Pressure)
+
+    #Get the centered arrays
+    mean_p = np.mean(Pressure)
+    Pressure -= mean_p
+    mean_a = np.mean(Area)
+    Area -= mean_a
+
+    #Calculate correlation, normalize it and extract for positive lags
+    cor_pp = np.correlate(Pressure,Pressure,mode='full')
+    if min(cor_pp) == 0 and max(cor_pp) == 0: cor_pp_filt = np.zeros(len(cor_pp[n_p - 1:]))
+    else:
+        cor_pp_norm = cor_pp / cor_pp[n_p - 1]
+        cor_pp_filt = cor_pp_norm[n_p - 1:]
+
+    cor_pa = np.correlate(Pressure,Area,mode='full')
+    if min(cor_pa) == 0 and max(cor_pa) == 0: cor_pa_filt = np.zeros(len(cor_pa[n_p - 1:]))
+    else: cor_pa_filt = cor_pa[n_p - 1:] / np.sqrt(np.sum(Pressure**2) * np.sum(Area**2))
+
+    #Plotting
+    Pressure = np.load(f'pressure_test/output_Pressure.{1:05d}.npy')[1:]
+    Area = np.load(f'pressure_test/output_Area.{1:05d}.npy')[1:]
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(13, 8), dpi=300)
+    tau = np.linspace(0, (n_p - 1) * dt * nstxout, n_p)
+    t = np.linspace(0, nsteps * dt, int(nstchk / nstxout))
+
+    axs[0,0].scatter(tau,cor_pp_filt, s=5, c='C0', label='Pressure Autocorrelation')
+    axs[0,0].plot(tau,cor_pp_filt, c='orange', alpha=0.35)
+    axs[0,0].set_xlabel('Time lag in ns')
+    axs[0,0].set_ylabel('Normalized Autocorrelation')
+    axs[0,0].grid(True)
+
+    axs[1,0].plot(t, Pressure, label='Pressure')
+    axs[1,0].set_xlabel('Time in ns')
+    axs[1,0].set_ylabel('Pressure in mN/m')
+    axs[1,0].grid(True)
+
+    axs[0,1].scatter(tau,cor_pa_filt, s=5, c='C0', label='Pressure Area Correlation')
+    axs[0,1].plot(tau,cor_pa_filt, c='orange', alpha=0.35)
+    axs[0,1].set_xlabel('Time lag in ns')
+    axs[0,1].set_ylabel('Normalized Crosscorrelation')
+    axs[0,1].grid(True)
+
+    axs[1,1].plot(t, Area, label='Area')
+    axs[1,1].set_xlabel('Time in ns')
+    axs[1,1].set_ylabel('Area in nm^2')
+    axs[1,1].grid(True)
+
+    #Fit A(tau)=a*e**(tau/tau _c)+c
+    def simpleExp(tau, tau_c, a, c):
+        return a * np.exp(-tau / tau_c) + c
+
+    params, cv = scipy.optimize.curve_fit(f=simpleExp, xdata=tau, ydata=cor_pp_filt, p0=[10*dt*nstxout,1,0])
+    tau_c, a, c = params
+    axs[0,0].plot(tau, simpleExp(tau, tau_c, a, c), c='r', label=f'Fit: A(tau) = {a:.2f}*e^(-tau/{tau_c:.2f})+{c:.2f}', ls='--')
+
+    axs[1,0].plot(np.ones(2)*(tau_c+t_equ), np.linspace(min(Pressure), max(Pressure),2), alpha=0.8, label='tau_c', ls='-.')
+    axs[1,0].plot(np.ones(2)*t_equ, np.linspace(min(Pressure), max(Pressure),2), alpha=0.8, label='t_equ', ls='--')
+    axs[1,1].plot(np.ones(2)*t_equ, np.linspace(min(Area), max(Area),2), alpha=0.8, c ='g', label='t_equ', ls='--')
+
+    #Set plot limits
+    if xlim:
+        xlcut = nsteps * dt * xlim[0]
+        xrcut = nsteps * dt * xlim[1]
+        xlcut_c = (nsteps * dt - t_equ) * xlim[0]
+        xrcut_c = (nsteps * dt - t_equ) * xlim[1]
+        axs[0, 0].set_xlim(xlcut_c, xrcut_c)
+        axs[0, 1].set_xlim(xlcut_c, xrcut_c)
+        axs[1, 0].set_xlim(xlcut, xrcut)
+        axs[1, 1].set_xlim(xlcut, xrcut)
+        if ylim:
+            xli = int(xlcut / dt / nstxout)
+            xri = int(xrcut / dt / nstxout)
+            xli_c = int(xlim[0] * n_p)
+            xri_c = int(xlim[1] * n_p)
+            axs[1,0].set_ylim(min(Pressure[xli:xri]), max(Pressure[xli:xri]))
+            axs[1,1].set_ylim(min(Area[xli:xri]), max(Area[xli:xri]))
+            axs[0,0].set_ylim(min(cor_pp_filt[xli_c:xri_c]), max(cor_pp_filt[xli_c:xri_c]))
+            axs[0,1].set_ylim(min(cor_pa_filt[xli_c:xri_c]), max(cor_pa_filt[xli_c:xri_c]))
+
+    params = f'L = {L}, N = {N}, ref_p = {ref_p}, compressibility = {compressibility:.3g}, tau_p = {tau_p:.3g}, tau_equ = {t_equ}, dt = {dt:.3g}, nstxout = {nstxout}'
+    plt.suptitle(f'{params}', fontsize=13)
+    axs[0,0].legend()
+    axs[0,1].legend()
+    axs[1,0].legend()
+    axs[1,1].legend()
+    plt.tight_layout()
+    plt.show()
+
+    print('tau_c = ', tau_c, 'ns')

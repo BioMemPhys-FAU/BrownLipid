@@ -112,11 +112,13 @@ class Universe(base):
             #Apply hard boundaries (if applicable)
             self.hard_boundaries()
 
+            #Apply periodic boundary conditions
+            self.w_universe = self.apply_pbc(pos = self.w_universe)
+
             #Apply pressure coupling
             if self.pressure_coupling != False: self.pressure_coupling_step()
 
-            #Apply periodic boundary conditions
-            self.w_universe = self.apply_pbc(pos = self.w_universe)
+
 
             #-----------------------------------------------------------------------------------------------------------------
             #Store particle positions
@@ -285,6 +287,8 @@ class Universe(base):
                                                                                      ref_pos       = self.w_universe,
                                                                                      conf_pos      = self.w_universe,
                                                                                      pbc_dim       = self.pbc_dim,
+                                                                                     area          = self.area,
+                                                                                     E_lrc_const   = self.E_lrc_const,
                                                                                      buffer_radius = self.lj_buffer,
                                                                                      vdw_cutoff    = self.lj_cutoff,
                                                                                      pairlist      = self.pp_pairlist,
@@ -507,6 +511,7 @@ class Universe(base):
                                             area            = self.area,
                                             dt              = self.dt,
                                             virial          = self.virial,
+                                            p_lrc_const     = self.p_lrc_const,
                                             ref_p           = self.ref_p,
                                             compressibility = self.compressibility,
                                             tau_p           = self.tau_p,
