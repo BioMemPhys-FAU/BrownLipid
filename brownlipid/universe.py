@@ -644,7 +644,7 @@ class Universe(base):
                 data = np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")
                 time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
 
-                start_idx = np.where( (time * self.dt) % skip == 0 )[0][0]
+                start_idx = np.where( (time / self.dt) % skip == 0 )[0][0]
 
                 self.u_storage  = np.vstack( (self.u_storage, data[start_idx::skip, block, :] ))
                 self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
@@ -682,7 +682,7 @@ class Universe(base):
                 data = np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")
                 time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
 
-                start_idx = np.where( (time * self.dt) % skip == 0 )[0][0]
+                start_idx = np.where( (time / self.dt) % skip == 0 )[0][0]
 
                 self.w_storage  = np.vstack( (self.w_storage, data[start_idx::skip, block, :] ))
                 self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
@@ -901,7 +901,7 @@ class Universe(base):
 
         lag = int( np.round(tau / self.dt / self.nstxout) )
 
-        dr = self.u_storage[:-lag, :, :] - self.u_storage[lag:, :, :]
+        dr = u_storage_analysis[:-lag, :, :] - u_storage_analysis[lag:, :, :]
         sqdist = np.square(dr).sum(axis=-1)
 
         #sd_per_particle = sqdist.flatten() #sqdist.mean(axis = 0)
