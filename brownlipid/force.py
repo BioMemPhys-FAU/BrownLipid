@@ -135,6 +135,9 @@ def \
     #Calculate the virial
     virial     = (sr12 - sr6 )
 
+    #test for hydrophobic cohesion correction:
+    #virial += -5558.849/len(virial)
+
     #Calculate "scaling factor" for the force
     force      = virial * inv_rij_sq
 

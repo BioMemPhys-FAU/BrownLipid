@@ -11,13 +11,19 @@ import matplotlib.pyplot as plt
 #Progress bar
 from tqdm import tqdm
 
+#Run information file
+import time
+import datetime
+import json
+import os
+import platform
+
 #from tests.utils_test import pbc_dim
 #Own modules
 from .base import base
 from . import utils
 from . import force
 from . import reflection
-from . import metropolis
 from . import clean
 from . import pressure
 
@@ -50,6 +56,11 @@ class Universe(base):
         #---------------------------------------------------------------------------------------------------------------------
         #Initialization Step
 
+        #Save simulation start time
+        start_timestamp = datetime.datetime.now()
+        self.start_timestamp = start_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        self.start_time_diff = time.perf_counter()
+
         #Populate the universe uniformly, but take hard boundaries into account
         self.w_universe = self.populate_universe_uniform()
         self.u_universe = np.copy( self.w_universe )       #Unwrapped, and wrapped universe are starting from the same positions
@@ -63,14 +74,13 @@ class Universe(base):
         u_storage  = np.zeros( ( nstchk_frames + 1, self.N, 2 ), dtype = np.float32 )
 
         #Setup storage for time steps -> Shape: (Number of frames in checkpoint file)
-        time_array = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
+        time_array = np.zeros(   nstchk_frames + 1          , dtype = np.float32 )
         f_inside   = np.zeros(  (nstchk_frames + 1, self.N), dtype = np.float32 )
-        potEnergy  = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
-        Virial     = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
-        Pressure   = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
-        ScalFac    = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
-        Area       = np.zeros(   nstchk_frames + 1         , dtype = np.float32 )
-        #Area[0] = self.area
+        potEnergy  = np.zeros(   nstchk_frames + 1          , dtype = np.float32 )
+        Virial     = np.zeros(   nstchk_frames + 1          , dtype = np.float32 )
+        Pressure   = np.zeros(   nstchk_frames + 1          , dtype = np.float32 )
+        ScalFac    = np.zeros(   nstchk_frames + 1          , dtype = np.float32 )
+        Area       = np.zeros(   nstchk_frames + 1          , dtype = np.float32 )
         
         #Store initial frame
         w_storage[0] = self.w_universe
@@ -82,7 +92,10 @@ class Universe(base):
         #Store initial fraction of particles in domains
         #f_inside[0] = self.in_domains
 
-        #This array is need for further calculation. If no soft walls are used, it should be always 0.
+        #Store initial area
+        Area[0] = self.area
+
+        #This array is needed for further calculation. If no soft walls are used, it should always be 0.
         self.force_from_wall = np.zeros((self.N, 2), dtype = np.float32)
 
         #---------------------------------------------------------------------------------------------------------------------
@@ -110,7 +123,7 @@ class Universe(base):
             else: pass
             
             #Apply hard boundaries (if applicable)
-            self.hard_boundaries()
+            self.apply_hard_boundaries()
 
             #Apply periodic boundary conditions
             self.w_universe = self.apply_pbc(pos = self.w_universe)
@@ -124,13 +137,17 @@ class Universe(base):
             #Store particle positions
 
             #Unwrap self.w_universe and store the positions in self.u_universe
-            for j, size in enumerate([self.size_x, self.size_y]): self.u_universe[:, j] = self.w_universe[:, j] - np.floor( (self.w_universe[:, j] - self.u_universe[:, j]) / size + 0.5 ) * size
+            #for j, size in enumerate([self.size_x, self.size_y]): self.u_universe[:, j] = self.w_universe[:, j] - np.floor( (self.w_universe[:, j] - self.u_universe[:, j]) / size + 0.5 ) * size
+
+            #Unwrapping with TOR scheme
+            for j, size in enumerate([self.size_x, self.size_y]):
+                self.u_universe[:, j] = self.u_universe[:, j] + (self.w_universe[:, j] - self.w_universe_prev[:, j]) - np.floor( (self.w_universe[:, j] - self.w_universe_prev[:, j]) / size + 0.5 ) * size
 
             #Write current state of the universe into storage arrays
             if not i % self.nstxout: 
 
                 #Calculate current time
-                time = self.dt * i
+                time_at_step = self.dt * i
                 
                 #--------------------------------------------------------------------------------------------------
                 #Fill storage arrays
@@ -141,17 +158,17 @@ class Universe(base):
                 w_storage[  chk_frame_index, :, : ] = self.w_universe
                 u_storage[  chk_frame_index, :, : ] = self.u_universe
                 
-                time_array[ chk_frame_index ] = time
+                time_array[ chk_frame_index ] = time_at_step
 
-                f_inside[   chk_frame_index ] = self.in_domains 
+                f_inside[   chk_frame_index ] = self.in_domains
 
                 potEnergy[  chk_frame_index ] = np.sum( self.pote )
                 Virial[     chk_frame_index ] = np.sum( self.virial )
 
-                if  self.pressure_coupling != False:
+                if self.pressure_coupling != False:
+                    Area[       chk_frame_index ] = self.area
                     Pressure[   chk_frame_index ] = self.p
                     ScalFac[    chk_frame_index ] = self.scal_fac
-                    Area[       chk_frame_index ] = self.area
 
                 #If check pointing is requested then write current storage arrays to disk and renew them
                 if not i % self.nstchk:
@@ -185,11 +202,22 @@ class Universe(base):
         
                     potEnergy  = np.zeros( nstchk_frames         , dtype = np.float32 )
                     Virial     = np.zeros( nstchk_frames         , dtype = np.float32 )
+                    Pressure   = np.zeros( nstchk_frames         , dtype = np.float32 )
+                    Area       = np.zeros( nstchk_frames         , dtype = np.float32 )
+                    ScalFac    = np.zeros( nstchk_frames         , dtype = np.float32 )
     
         self.last_frame = np.copy(self.w_universe)
+
+        #Save simulation end time
+        end_timestamp = datetime.datetime.now()
+        self.end_timestamp = end_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        self.end_time_diff = time.perf_counter()
+
+        #Save run file with run information
+        self.save_run_info()
+
         print("Your simulation terminated successfully!")
         print("Have a nice day and thanks for the fish! :-)")
-
 
     #--------------------------------------------------------------------------------------------------------------
     # Function for initilization of the universe
@@ -262,7 +290,7 @@ class Universe(base):
 
         """
         Displace particle positions according to the Brown's Diffusion.
-        For each particle and for every dimensions a random number from a standard normal distribution is drawn.
+        For each particle and for every dimension a random number from a standard normal distribution is drawn.
         The random number is then scaled by a factor taking a diffusion coefficient into account:
 
             sqrt( 2 * D * dt) (1)
@@ -301,7 +329,7 @@ class Universe(base):
             #Calculate the displace vector
             self.displace = diff_dt * F / self.RT + factor * np.random.randn( self.N, 2 )
 
-        #RANDOM
+    #RANDOM
         else:
 
             diff_dt       = (self.d_coeffs * self.dt).reshape(-1, 1)
@@ -360,133 +388,6 @@ class Universe(base):
             pos[:, i] = np.where(pos[:, i] > size, (2 * size - pos[:, i]), pos[:, i])
 
         return pos
-    
-    #----------------------------------------------------------------------------------------------------------------------------------------
-    
-    def double_metropolis_scheme(self, index, prev_index ):
-
-        """
-        Function calls Metropolis Algorithm to decide:
-
-        A) Particle entering a domain
-        B) Particle leaving a domain
-
-        The implemention distinguish between four cases for each particle:
-
-                               __ A.1 Particle was already in domain in the step before -> Particle remains in domain
-                              |
-        A) Particle in domain 
-                              |__ A.2 Particle was not in domain in the step before -> Particle wants to enter domain -> Metropolis
-
-                                  __ B.1 Particle was already in domain in the step before -> Particle wants to leave domain -> Metropolis
-                                 |
-        B) Particle not in domain
-                                 |__ B.2 Particle was not in domain in the step before -> Particle stays outside
-
-        The array self.in_domains contains information about the assignment of particles to domains in the previous step, but not about
-        the current. self.in_domains is updated during this function.
-
-        Parameters
-        ----------
-        index := numpy.ndarray
-            Index of particles in the domain in the current step
-        prev_index := numpy.ndarray
-            Index of particles in the domain in the previous step
-
-        Returns
-        -------
-        index_after_metropolis := numpy.ndarray
-            Index of particles which Metropolis step got rejected. Array is further used for reflection.
-
-        """
-        
-        #Case A
-        A = self.in_domains[ index ]
-        #Case A.1 ->  TRUE: Particle was already in this domain and remains there -> Do not reflect
-        #Case A.2 -> FALSE: Particle was not in a domain and wants to enter this domain now -> METROPOLIS
-
-        #Case B
-        #not_index contains particle indices that leave the domain -> indices that are in prev_index but not in index
-        #assume_unique=True, because no particle can be multiple times in the same domain
-        not_index = np.setdiff1d(ar1 = prev_index, ar2 = index, assume_unique=True) #Return the unique values in ar1 that are not in ar2.
-        B = self.in_domains[ not_index ]
-        #Case B.1 -> TRUE:  Particle wants to leave domain -> METROPOLIS
-        #Case B.2 -> FALSE: Particle stays outside domain -> Do not reflect -> That should only happen if the point in a previous iteration was allowed to leave the domain.
-        
-
-        #Sort particles for which Metropolis must be called
-        entering_index = index[ ~A ]    #Case A.2
-        leaving_index  = not_index[ B ] #Case B.1
-
-        #Some tests
-        assert np.all( B ) == True, 'That should not happen with circles! - 1'
-        assert np.all( leaving_index == not_index), 'That should not happen with circles! - 2'
-        
-        #Init empty list to collect indices of particles with rejected Metropolis Step
-        index_after_metropolis = []
-
-        #-----------------------------------------------------------------------------------------------------------------------
-        #OUTSIDE -> INSIDE
-
-        #Decide for each "entering-applicant" particle independently if it is allowed to enter the domain
-        #Iterate over A.2
-        for p_index in entering_index:
-
-            if self.target_fraction != None:
-                
-                #Calculate changing fraction
-                x_old = self.in_domains.sum()     
-                x_new = self.in_domains.sum() + 1
-                deltaE = metropolis.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = self.target_fraction, forceconstant = self.fconstant)
-                
-                #Entering is accepted
-                if metropolis.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = True
-                #Entering is rejected
-                else: index_after_metropolis.append( p_index ) #Particle will get reflected
-
-            elif self.barrier != None:
-                deltaE = self.bltz_prob
-            
-                #Entering is accepted
-                if metropolis.fast_metropolis_decision(deltaE = deltaE): self.in_domains[ p_index ] = True
-                #Entering is rejected
-                else: index_after_metropolis.append( p_index ) #Particle will get reflected
-
-            else: raise ValueError('Could not handle request!')
-            
-        
-
-        #INSIDE -> OUTSIDE
-
-        #Decide for each particle indepently if it is allowed to enter the domain
-        #Iterate over B.1
-        for p_index in leaving_index:
-
-            if self.target_fraction != None:
-                
-                #Calculate changing fraction
-                x_old = self.in_domains.sum()     
-                x_new = self.in_domains.sum() - 1
-
-                deltaE = metropolis.get_delta_E(x_old = x_old, x_new = x_new, N = self.N, f_true = self.target_fraction, forceconstant = self.fconstant)
-                
-                #Leaving is accepted
-                if metropolis.metropolis_decision(deltaE = deltaE, RT = self.RT): self.in_domains[ p_index ] = False
-                #Leaving is rejected
-                else: index_after_metropolis.append( p_index )
-
-            elif self.barrier != None:
-                deltaE = self.bltz_prob
-                
-                #Leaving is accepted
-                if metropolis.fast_metropolis_decision(deltaE = deltaE): self.in_domains[ p_index ] = False
-                #Leaving is rejected
-                else: index_after_metropolis.append( p_index )
-
-            else: raise ValueError('Could not handle request!')
-            
-    
-        return np.array(index_after_metropolis), index[ A ]
 
     #-----------------------------------------------------------------------------------------------------------------------------
     #Pressure coupling
@@ -511,40 +412,42 @@ class Universe(base):
                                             area            = self.area,
                                             dt              = self.dt,
                                             virial          = self.virial,
+                                            K_A             = self.K_A,
+                                            ref_A           = self.ref_A,
                                             p_lrc_const     = self.p_lrc_const,
                                             ref_p           = self.ref_p,
                                             compressibility = self.compressibility,
                                             tau_p           = self.tau_p,
                                             thresh_p        = self.thresh_p)
 
-        self.w_universe *= self.scal_fac
+        if self.frame % self.nstpcouple == 0:
+            self.w_universe *= self.scal_fac
 
-        self.size_x *= self.scal_fac
-        self.size_y *= self.scal_fac
+            self.size_x *= self.scal_fac
+            self.size_y *= self.scal_fac
 
-        self.area *= self.scal_fac**2
+            self.area *= self.scal_fac**2
 
-        #Update sizes in pbc_dim and hard_wall
-        if len(self.pbc_dim[1]) == 1: self.pbc_dim[1][0] *= self.scal_fac
-        if len(self.pbc_dim[1]) == 2:
-            self.pbc_dim[1][0] *= self.scal_fac
-            self.pbc_dim[1][1] *= self.scal_fac
+            #Update sizes in pbc_dim and hard_wall
+            if len(self.pbc_dim[1]) == 1: self.pbc_dim[1][0] *= self.scal_fac
+            if len(self.pbc_dim[1]) == 2:
+                self.pbc_dim[1][0] *= self.scal_fac
+                self.pbc_dim[1][1] *= self.scal_fac
 
-        if len(self.hard_wall[1]) == 1: self.hard_wall[1][0] *= self.scal_fac
-        if len(self.hard_wall[1]) == 2:
-            self.hard_wall[1][0] *= self.scal_fac
-            self.hard_wall[1][1] *= self.scal_fac
+            if len(self.hard_wall[1]) == 1: self.hard_wall[1][0] *= self.scal_fac
+            if len(self.hard_wall[1]) == 2:
+                self.hard_wall[1][0] *= self.scal_fac
+                self.hard_wall[1][1] *= self.scal_fac
 
     #-----------------------------------------------------------------------------------------------------------------------------
     #Boundaries
-    def hard_boundaries(self):
+    def apply_hard_boundaries(self):
 
         """
         Function to handle domains with hard boundaries.
         For particles crossing such a boundary, either to leave or to enter a domain, a Metropolis step is performed.
         If accepted, the particle is allowed to cross the boundary.
-        If rejected, the particle is reflected depending on the geometry of the domain. 
-
+        If rejected, the particle is reflected depending on the geometry of the domain.
 
         """ 
         
@@ -579,10 +482,7 @@ class Universe(base):
                     #assert list(prev_index) == list(prev_index_old), f'Problem with new list {prev_index} and old list {prev_index_old}'
                     
                     #--------------------------------------------------------------------------------
-                    #Perform Metropolis step if required
-                    if any(self.metropolis): index, fix_inside_index = self.double_metropolis_scheme( index = org_index, prev_index = prev_index)
-                    else: 
-                        index = org_index 
+                    index = org_index
 
                     #index is a list of particle indices that are reflected by the boundary 
                     
@@ -646,495 +546,35 @@ class Universe(base):
                     self.d_coeffs[ self.hard_boundaries_geometry[key][3] ] = diff_coeff
 
                 else: raise ValueError("Currently I cannot handle the provided geometry.")
-    
 
-    #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    #Analysis part
-    def load_data_unwrap(self, block = None, skip = 1):
-
-        try:
-            if self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1 and self.u_storage.shape[1] == self.N: return 0
-        except: pass
-
-        if type(block) == type(None): block = np.arange( self.N )
-        
-        self.u_storage  = np.zeros( (0, len(block), 2), dtype = np.float32 )
-        self.time_array = np.zeros( (0)               , dtype = np.float32 )
-
-        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
-
-            chk_number = str(chk_number)
-
-            if chk_number == "1":
-
-                self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")[::skip, block, :] ))
-                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")[::skip] ) 
-
-            else:
-
-                data = np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")
-                time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
-
-                start_idx = np.where( (time * self.dt) % skip == 0 )[0][0]
-
-                self.u_storage  = np.vstack( (self.u_storage, data[start_idx::skip, block, :] ))
-                self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
-
-        #Validation
-        assert self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1, "Number of frames is not correct!"
-
-        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip, atol = 1E-3, rtol = 0), "Time step distance is not as expected!"
-        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ), atol = 1E-3, rtol = 0 ), "Time step distance is not as expected!"
-
-        return 1
-    
-    def load_data_wrap(self, block = None, skip = 1):
-
-        try:
-            if self.w_storage.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
-        except: pass
-
-        if block == None: block = np.arange( self.N )
-        
-        self.w_storage  = np.zeros( (0, len(block), 2), dtype = np.float32 )
-        self.time_array = np.zeros( (0)               , dtype = np.float32 )
-
-        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
-
-            chk_number = str(chk_number)
-
-            if chk_number == "1":
-
-                self.w_storage  = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")[::skip, block, :] ))
-                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")[::skip] ) 
-
-            else:
-
-                data = np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")
-                time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
-
-                start_idx = np.where( (time * self.dt) % skip == 0 )[0][0]
-
-                self.w_storage  = np.vstack( (self.w_storage, data[start_idx::skip, block, :] ))
-                self.time_array = np.append( self.time_array, time[start_idx::skip]  ) 
-
-        print(f"Check {chk_number}: {self.time_array[-1]}")
-
-        #Validation
-        assert self.w_storage.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.w_storage.shape[0]}"
-
-        assert np.allclose( np.diff( self.time_array ), self.dt * self.nstxout * skip, rtol = 0, atol = 1E-3), "Time step distance is not as expected!"
-        assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ), rtol = 0, atol = 1E-3 ), "Time step distance is not as expected!"
-
-        return 1
-
-
-    def mean_square_displacement(self, begin = 0, stop = None, fft = True, block = None):
-
-        """
-        Mean Square Displacement
-
-        Calculate the Mean Square Displacement of the particles for different lag times.
-
-        Parameters
-        ----------
-
-        skip := float
-            Skip lag times to decrease calculation time (ns)
-        begin := float
-            Start time for analysis (ns)
-        stop := float
-            Stop time for analysis (ns)
-        """
-        
-        if stop == None: stop = self.nsteps * self.dt
- 
-        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
-        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-
-        if type(block) == type(None): block = np.arange( self.N )
-        
-        #Convert time to frames
-        begin = int( np.round( begin / self.dt / self.nstxout ) )
-        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-        
-        #Number of steps for analysis
-        nsteps_analysis = stop - begin
-
-        print(f"Calculating MSD...")
-        print(f"Start: Frame {begin}")
-        print(f"Stop : Frame {stop}")
-        print("")
-
-        #Load data
-        self.load_data_unwrap(block = block)
-
-        u_storage_analysis = np.copy( self.u_storage[begin:stop, :, :] )
-
-        assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
-
-        lagtimes = np.arange(0, nsteps_analysis, 1)
-        
-        print("Start analysis...")
-        if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis)
-        else: msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
-        
-        #Convert lagtimes array to physical time
-        tau = lagtimes.astype( np.float32 )
-        tau = tau * self.dt * self.nstxout
-
-        return tau, msd, sd_per_particle
-    
-    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
-
-        """
-        Mean Square Displacement
-
-        Calculate the Mean Square Displacement of the particles for different lag times.
-
-        Parameters
-        ----------
-
-        skip := float
-            Skip lag times to decrease calculation time (ns)
-        begin := float
-            Start time for analysis (ns)
-        stop := float
-            Stop time for analysis (ns)
-        """
-        
-        if stop == None: stop = self.nsteps * self.dt
- 
-        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
-        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-
-        if block == None: block = np.arange( self.N )
-        if skip  == None: skip  = self.dt / self.nstxout
-        
-        #Convert time to frames
-        skip  = int( np.round( skip  / self.dt / self.nstxout ) )
-        begin = int( np.round( begin / self.dt / self.nstxout ) ) // skip
-        stop  = int( np.round( stop  / self.dt / self.nstxout ) ) // skip
-        
-        #Number of steps for analysis
-        nsteps_analysis = (stop - begin)
-
-        print(f"Calculating RDF...")
-        print(f"Start: Frame {begin}")
-        print(f"Stop : Frame {stop} ")
-        print(f"Skip : Frame {skip} ") 
-        print("")
-
-        #Load data
-        self.load_data_wrap(skip = skip)
-
-        w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
-
-        assert nsteps_analysis == w_storage_analysis.shape[0], 'Not correct number of frames'
-
-        if bulk: binmids, rdf, cdf = utils.self_bulk_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
-        else:    binmids, rdf, cdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
-        
-        return binmids, rdf.mean(0), cdf.mean(0)
-    
-    def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max", fft=True):
-
-        """
-        Mean Square Displacement in one dimension
-
-        Calculate the Mean Square Displacement of the particles for different lag times.
-
-        Parameters
-        ----------
-
-        direction := str
-            Direction (x,y) in which the MSD is calculated
-        skip := float
-            Skip lag times to decrease calculation time (ns)
-        begin := float
-            Start time for analysis (ns)
-        stop := float
-            Stop time for analysis (ns)
-        """
-
-        if direction == 'x': direction = 0
-        elif direction == 'y': direction = 1
-        else: raise ValueError('Could not handle request! Use x or y!')
-        
-        if stop == None: stop = self.nsteps * self.dt
- 
-        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
-        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        
-        #Convert time to frames
-        begin = int( np.round( begin / self.dt / self.nstxout ) )
-        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-        skip  = int( np.round( skip  / self.dt / self.nstxout) )
-
-        assert (self.nstxout % skip) == 0, 'Skip must be a multiple of nstxout'
-        
-        #Number of steps for analysis
-        nsteps_analysis = stop - begin
-
-        #Lag times at which MSD is evaluated
-        if max_lag == "max": lagtimes = np.arange(0, nsteps_analysis, skip)
-        else:
-
-            max_lag = int( np.round( begin / self.dt ) )
-
-            lagtimes = np.arange(0, max_lag, skip)
-
-        print(f"Calculating MSD...")
-        print(f"Start: Frame {begin}")
-        print(f"Stop : Frame {stop}")
-        print(f"Skip : Frame {skip}")
-        print(f"Frames: {nsteps_analysis}")
-        print("")
-
-
-        #Load data
-        self.load_data_unwrap()
-
-        #Storage arrays
-        msd             = np.zeros(  lagtimes.shape[0],          dtype = np.float32)
-        sd_per_particle = np.zeros( (lagtimes.shape[0], self.N), dtype = np.float32)
-
-        u_storage_analysis = np.copy( self.u_storage[begin:stop, :, direction] )
-
-        assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
-
-        #msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
-        if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis.reshape(-1, self.N, 1))
-        else: msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
-
-        #Convert lagtimes array to physical time
-        tau = np.float32(lagtimes)
-        tau = tau * self.dt * self.nstxout
-
-        return tau, msd, sd_per_particle
-    
-    def mean_square_displacement_distr(self, tau, begin = 0, stop = None):
-        
-        if stop == None: stop = self.nsteps * self.dt
- 
-        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
-        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        assert (stop - begin) >= tau, 'Error. Time lag is larger than time interval!'
-
-        #Convert time to frames
-        begin = int( np.round( begin / self.dt / self.nstxout ) )
-        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-       
-        #Load data
-        self.load_data_unwrap()
-        
-        u_storage_analysis = self.u_storage[begin:stop]
-
-        lag = int( np.round(tau / self.dt / self.nstxout) )
-
-        dr = self.u_storage[:-lag, :, :] - self.u_storage[lag:, :, :]
-        sqdist = np.square(dr).sum(axis=-1)
-
-        #sd_per_particle = sqdist.flatten() #sqdist.mean(axis = 0)
-        sd_per_particle = sqdist# np.mean(sqdist, axis = 0)#.mean(axis = 0)
-
-        print(f'Analysis from {begin * self.dt * self.nstxout / 1000 / 1000} to {stop * self.dt * self.nstxout / 1000 / 1000}')
-        print(f'MSD Distribution at {lag * self.dt * self.nstxout / 1000 / 1000} ms') 
-
-        return sd_per_particle
-    
-    def mean_square_displacement_distr_vectors(self, tau, grid_spacing = 1, begin = 0, stop = None):
-        
-        if stop == None: stop = self.nsteps * self.dt
- 
-        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!' 
-        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        assert (stop - begin) >= tau, 'Error. Time lag is larger than time interval!'
-
-        #Convert time to frames
-        begin = int( np.round( begin / self.dt / self.nstxout ) )
-        stop  = int( np.round( stop  / self.dt / self.nstxout ) )
-       
-        #Load data
-        self.load_data_unwrap()
-        
-        u_storage_analysis = self.u_storage[begin:stop]
-
-        lag = int( np.round(tau / self.dt / self.nstxout) )
-
-        dr = u_storage_analysis[lag:, :, :] - u_storage_analysis[:-lag, :, :]
-
-        dr = dr[::1]
-
-        storage = []
-
-        grid, idx_grid, full_grid, nx, ny = utils.generate_grid(size_x = self.size_x,
-                                                                size_y = self.size_y,
-                                                                grid_spacing = grid_spacing)
-
-        for i, dr_i in tqdm( enumerate(dr), total = dr.shape[0] ):
-
-            storage_i = utils.vector_field(pos = self.u_storage[:-lag, :, :][i], 
-                                           displacement = dr_i,
-                                           grid = grid,
-                                           idx_grid = idx_grid,
-                                           nx = nx, 
-                                           ny = ny,
-                                           pbc_dim = self.pbc_dim)
-
-
-            storage.append(storage_i) 
-
-
-        #-------------------------------------------------------------------------------------------------------------------
-        #Plotting
-
-        cyberpunk_theme = {
-                           'axes.edgecolor': 'white',
-                           'axes.facecolor': '#1d1f21',
-                           'axes.labelcolor': 'white',
-                           'axes.titlecolor': 'white',
-                           'figure.facecolor': '#1d1f21',
-                           'xtick.color': 'white',
-                           'ytick.color': 'white',
-                           'text.color': 'white',
-                           'grid.color': 'gray',
-                           'grid.linestyle': ':'
-                          }
-
-        # Set cyberpunk theme as default
-        plt.style.use(cyberpunk_theme)
-
-        #Cyperpunk
-        fig, ax = plt.subplots()
-
-        for spine in ['left', 'right', 'bottom', 'top']:
-            ax.spines[spine].set_color('#66ccff')
-            ax.spines[spine].set_linewidth(2)
-        ax.tick_params(axis='x', colors='#66ccff')
-        ax.tick_params(axis='y', colors='#66ccff')
-
-
-        storage = np.array(storage)
-        
-        storage_mean = np.nanmean( storage, axis = 0)
-
-        ax.quiver(full_grid[:, :, 0], full_grid[:, :, 1], storage_mean[:,:,0], storage_mean[:,:,1], scale = 5.0,
-                   color = 'hotpink',
-                   angles='xy',
-                   scale_units='xy',
-                   units = 'xy',
-                   pivot = 'mid', alpha = 1.)#, cmap='magma', C = arrow_length)
-
-        ax.set_aspect('equal')
-        
-        plt.savefig(f"{self.output}_vector_field.png", dpi = 300)
-        
-        plt.close()
-        #------------------------------------------------------------
-        
-        #Cyperpunk
-        fig, ax = plt.subplots(subplot_kw=dict(projection="polar"))
-
-        ax.set_theta_zero_location(loc = 'N')
-        ax.set_theta_direction(-1)
-
-        #for spine in ['left', 'right', 'bottom', 'top']:
-        #    ax.spines[spine].set_color('#66ccff')
-        #    ax.spines[spine].set_linewidth(2)
-        #ax.tick_params(axis='x', colors='#66ccff')
-        #ax.tick_params(axis='y', colors='#66ccff')
-
-        arrow_length = np.sqrt(np.nansum(storage**2, axis = -1))
-
-        storage = storage / arrow_length[:, :, :, np.newaxis]
-
-        x_angle_distr = np.clip(a = np.sum(storage * np.array([1., 0.]), axis = -1), a_min = -1, a_max = 1)
-        x_angle_distr = np.arccos( x_angle_distr )
-
-        x_angle_distr = np.where(storage[:, :, :, 1] < 0, (2*np.pi - x_angle_distr), x_angle_distr)
-
-        y_angle_distr = np.clip(a = np.sum(storage * np.array([0., 1.]), axis = -1), a_min = -1, a_max = 1)
-        y_angle_distr = np.arccos( y_angle_distr )
-
-        print(storage.shape)
-        
-        y_angle_distr = np.where(storage[:, :, :, 0] < 0, (2*np.pi - y_angle_distr), y_angle_distr)
-
-        
-        ax.hist(x_angle_distr.flatten(), bins = np.linspace(0, 2*np.pi, 51), histtype = 'step', label = 'x-axis', density = True, color = 'hotpink')
-        ax.hist(y_angle_distr.flatten(), bins = np.linspace(0, 2*np.pi, 51), histtype = 'step', label = 'y-axis', density = True, color = '#66ccff')
-
-        #plt.legend()
-
-        plt.savefig(f"{self.output}_vector_field_angles.png", dpi = 300)
-
-
-        print(f'Analysis from {begin * self.dt * self.nstxout / 1000 / 1000} to {stop * self.dt * self.nstxout / 1000 / 1000}')
-        print(f'MSD Distribution at {lag * self.dt * self.nstxout / 1000 / 1000} ms') 
-
-    
-    @staticmethod
-    def mean_square_displacement_fit(tau, msd, dim = 2, begin = 0, stop = None):
-
-        if stop == None: stop = tau[-1]
-
-        mask = np.logical_and( begin <= tau, tau <= stop)
-
-        assert np.all( ~mask ) == False, 'Required range is not found in tau'
-
-        fit_tau = tau[mask]
-        fit_msd = msd[mask]
-
-        #tau -> ns
-        #msd -> nm2
-        DiffCoeff, Intercept = np.polyfit(x = fit_tau, y = fit_msd, deg = 1)
-
-        DiffCoeff /= (2 * dim)
-
-        #DiffCoeff -> nm2/ns -> um2/ms
-        #Intercept -> nm2
-
-        return DiffCoeff, Intercept
-
-    @staticmethod
-    def plot_log_histogram_mean_square_displacement_distr(ax, sd_per_particle, label, lo_limit = 1E-4, up_limit = 1.0, nbins = 51, color = 'red'):
-
-        """
-        Plot histogram with log-space bins
-
-        Parameters
-        ----------
-
-        sd_per_particle := numpy.ndarray
-            Squared-Displacement per particle at a single time-lag tau (expected unit: square-micrometer)
-        label           := str
-            Label for legend
-        lo_limit        := float
-            Lower limit for log-spaced bins (opt.)
-        up_limit        := float
-            Upper limit for log-spaced bins (opt.)
-        nbins           := int
-            Number of log-spaced bins (opt.)
-        color           := str
-            Matplotlib color
-            
-        """
-
-        ax.hist(sd_per_particle, 
-                density=True, 
-                bins = np.logspace(np.log10(lo_limit),np.log10(up_limit), nbins),
-                histtype = 'stepfilled',
-                alpha = 0.3,
-                edgecolor = color,
-                color = color,
-                label = label
-                )
-
-        #Scale
-        ax.set_xscale('log')
-
-        #Label
-        #plt.ylabel('Number of Trajectories')
-        #plt.xlabel(r'MSD / $\mu$m$^2$')
-    
+    #--------------------------------------------------------------------------------------------------------------
+    #Run information file
+    def save_run_info(self):
+
+        self.simulation_duration_sec = self.end_time_diff - self.start_time_diff
+
+        if not self.simulation_duration_sec > 0: steps_per_second = 0
+        else: steps_per_second = round(self.nsteps / self.simulation_duration_sec, 2)
+
+        m, s = divmod(self.simulation_duration_sec, 60)
+        h, m = divmod(m, 60)
+
+        run_info = {
+            'meta': {
+                'working_directory': os.getcwd(),
+                'start_time': self.start_timestamp,
+                'end_time': self.end_timestamp,
+            },
+            'parameters': self.run_info_params,
+            'performance': {
+                'duration_seconds': round(self.simulation_duration_sec, 4),
+                'duration': f'{int(h):d}h {int(m):02d}m {int(s):02d}s',
+                'steps_per_second': steps_per_second
+            }
+        }
+
+        filename = self.output + f"_run_info.json"
+
+        with open(filename, 'w') as f:
+            json.dump(run_info, f, indent=5)
+        print(f'Saved run info in: {filename}')

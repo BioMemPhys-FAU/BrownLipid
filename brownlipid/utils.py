@@ -9,8 +9,57 @@ This module contains a bunch of helper functions that are used in multiple steps
 
 import numpy as np
 import matplotlib.pyplot as plt
+import json
 from tqdm import tqdm
 from numba import jit,prange
+
+def load_params(json_file):
+
+    #Read json file
+    with open(json_file, 'r') as f:
+        input_params = json.load(f)
+
+    #Filter for parameters (important when using run info file as input)
+    if any(k == 'parameters' for k in input_params.keys()): input_params = input_params["parameters"]
+
+    #Check for unknown values in parameter file
+    unknown = set(input_params) - {'size_x', 'size_y', 'N', 'pbc_dim', 'nsteps', 'dt', 'nstxout', 'nstchk', 'base_d_coeff', 'hard_boundaries', 'softwall', 'bounce_scale', 'checkpoint_structure', 'viscosity', 'random_domains', 'diffusion_domains', 'external_forces', 'temp', 'pressure_coupling', 'output'}
+    if unknown: raise KeyError(f"Unknown parameter(s): {unknown}")
+
+    #Define default values
+    params = {
+        'size_x': 10.0,
+        'size_y': 10.0,
+        'N': 1000,
+        'pbc_dim': 'xy',
+        'nsteps': 5000,
+        'dt': 1.0,
+        'nstxout': 1,
+        'nstchk': 1,
+        'base_d_coeff': 1.0,
+        'hard_boundaries': {},
+        'softwall': False,
+        'bounce_scale': None,
+        'checkpoint_structure': None,
+        'viscosity': 1,
+        'random_domains': False,
+        'diffusion_domains': 0.0,
+        'external_forces': {},
+        'temp': 298,
+        'pressure_coupling': {},
+        'output': 'output'
+    }
+
+    #Overwrite default values with given values
+    params.update(input_params)
+
+    #Make sure that the datatypes are correct
+    params['nsteps'] = int(params['nsteps'])
+    params['nstxout'] = int(params['nstxout'])
+    params['nstchk'] = int(params['nstchk'])
+
+    return params
+
 
 def heaviside(x, threshold):
 
@@ -297,7 +346,7 @@ def get_elements_only_in_a(a, b, assume_unique):
 
 @jit(nopython=True, fastmath=True, parallel = False)
 def evaluate_lagtimes(pos, lagtimes, N):
-    
+
     #Storage arrays
     msd             = np.zeros(  lagtimes.shape[0],     dtype = np.float32)
     sd_per_particle = np.zeros( (lagtimes.shape[0], N), dtype = np.float32)

@@ -6,11 +6,14 @@ from tqdm import tqdm
 import sys
 
 from . import utils
+from .utils import load_params
+
 
 class base:
 
     def __init__(
                            self,
+                      input_file:        Union[bool, str] = False,
                           size_x:                    float = 10.0,
                           size_y:                    float = 10.0,
                                N:                      int = 1000,
@@ -27,7 +30,6 @@ class base:
                        viscosity:                    float = 1,
                   random_domains:                     bool = False,
                diffusion_domains:                    float = 0.0,
-                      metropolis:                     dict = {},
                  external_forces:                     dict = {},
                             temp:                    float = 298,
                pressure_coupling:        Union[bool, dict] = {},
@@ -35,32 +37,57 @@ class base:
 
                 ):
 
-        
-        self.size_x               = size_x
-        self.size_y               = size_y
-        self.area                 = size_x * size_y
-        self.N                    = N
-        self.N_only_lipids        = N
-        self.nsteps               = nsteps
-        self.dt                   = dt
-        self.nstxout              = nstxout
-        self.nstchk               = nstchk
-        self.checkpoint_structure = checkpoint_structure
-        self.base_d_coeff         = base_d_coeff
-        self.output               = output
-        self.metropolis           = metropolis
-        self.bounce_scale         = bounce_scale
-        self.viscosity            = viscosity
-        self.external_forces      = external_forces
-        self.temp                 = temp
-        self.RT                   = 8.3145 * 1E-3 * self.temp
-        self.NRT                  = N * self.RT
-        self.NkT                  = N * 1.38 * self.temp #1E-23 J
-        self.d_coeffs             = np.repeat( self.base_d_coeff, self.N )
-        self.diffusion_domains    = diffusion_domains
-        self.softwall             = softwall
-        self.pressure_coupling    = pressure_coupling
- 
+        #Check if input json file is used (Note that if input is given, all other parameters will be overwritten or set to default)
+        if input_file:
+
+            assert isinstance(input_file, str), "input_file must be a string!"
+
+            input_params = load_params(input_file)
+
+            #Save input parameters for run info file
+            self.run_info_params = input_params.copy()
+
+            #Convert dictionary to list
+            input_params = list(input_params.items())
+
+            #Definine as variables of class
+            for k, v in input_params:
+                setattr(self, k, v)
+
+        #No input file: Use base parameters
+        else:
+            #Saving input parameters for run information file
+            run_info_params = locals().copy()
+            if 'self' in run_info_params: del run_info_params['self']
+            if 'input_file' in run_info_params: del run_info_params['input_file']
+            self.run_info_params = run_info_params
+
+            self.size_x               = size_x
+            self.size_y               = size_y
+            self.N                    = N
+            self.nsteps               = int(nsteps)
+            self.dt                   = dt
+            self.nstxout              = int(nstxout)
+            self.nstchk               = int(nstchk)
+            self.checkpoint_structure = checkpoint_structure
+            self.base_d_coeff         = base_d_coeff
+            self.output               = output
+            self.bounce_scale         = bounce_scale
+            self.viscosity            = viscosity
+            self.external_forces      = external_forces
+            self.temp                 = temp
+            self.diffusion_domains    = diffusion_domains
+            self.softwall             = softwall
+            self.pressure_coupling    = pressure_coupling
+
+        #Precalculation
+        self.area                   = self.size_x * self.size_y
+        self.N_only_lipids          = self.N
+        self.RT                     = 8.3145 * 1E-3 * self.temp
+        self.NRT                    = self.N * self.RT
+        self.NkT                    = self.N * 1.38 * self.temp #1E-23 J
+        self.d_coeffs               = np.repeat( self.base_d_coeff, self.N )
+
         #Base checking
         assert self.nsteps >= self.nstxout, "Number of steps must be larger or equal than frequency of output (nstxout)!"
         assert self.nstchk >= self.nstxout, "Frequency of output (nstxout) must be smaller than frequency of checkpoints (nstchk)!"
@@ -73,6 +100,7 @@ class base:
         
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #PBC Handling
+        if input_file: pbc_dim = self.pbc_dim
         pbc_index = []
         pbc_size  = []
 
@@ -102,14 +130,15 @@ class base:
 
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #Init Domains with hard boundary conditions
-        
+
+        if input_file: hard_boundaries = self.hard_boundaries
         self.domain_coords = np.array([]).reshape(0,2)
         self.domain_radii  = []
         self.n_domains     = 0
 
         if any( hard_boundaries ):
 
-            if softwall == True: hard_boundaries_geometry = {'Type': "Soft"}
+            if self.softwall == True: hard_boundaries_geometry = {'Type': "Soft"}
             else: hard_boundaries_geometry = {'Type': "Hard"}
 
             self.total_area_domains = 0
@@ -146,7 +175,7 @@ class base:
 
                         self.total_area_domains += np.pi * r**2
 
-                    if random_domains == True:
+                    if self.random_domains == True:
 
                         print("Random placement of domains requested!")
                         print("Attention! Previous coordinates will be overwritten!")
@@ -155,8 +184,8 @@ class base:
 
                         ran_mid = utils.distribute_domains_random_same_radius(number  = len(geometries),
                                                                               r       = r,
-                                                                              size_x  = size_x,
-                                                                              size_y  = size_y,
+                                                                              size_x  = self.size_x,
+                                                                              size_y  = self.size_y,
                                                                               pbc_dim = self.pbc_dim, output = self.output)
 
                         for i, ran_mid_i in enumerate(ran_mid): 
@@ -180,33 +209,10 @@ class base:
         else: self.hard_boundaries_geometry = {}
         
         self.d_coeffs = np.append( self.d_coeffs, np.repeat( self.diffusion_domains, self.n_domains ))
-        
-        #----------------------------------------------------------------------------------------------------------------------------------------------
-        #Initialize for metropolis steps
-        if any(self.metropolis):
-
-            self.target_fraction = None
-            self.barrier = None
-
-            #Fraction of particles in domains is given
-            if   'Inside'     in self.metropolis.keys() and 'Barrier' not in self.metropolis.keys(): 
-
-                self.target_fraction = self.metropolis['Inside']
-                self.fconstant       = 1E8
-            
-            #Barrier for particles to enter/leave domains is given
-            elif 'Inside' not in self.metropolis.keys() and 'Barrier'     in self.metropolis.keys(): 
-
-                self.barrier         = self.metropolis['Barrier']
-                self.bltz_prob       = np.min([1.0, np.exp( - self.barrier / self.RT )])
-            
-            #Fraction and barrier is given -> Problem!
-            elif 'Inside'     in self.metropolis.keys() and 'Barrier'     in self.metropolis.keys(): raise ValueError('Can handle either Inside or Barrier for Metropolis. But not both!')
-
-            else: raise ValueError('Can not handle metropolis request!')
 
         #----------------------------------------------------------------------------------------------------------------------------------------------
         #Initialize for external forces
+        external_forces = self.external_forces
 
         #This parameter is needed later for initializing positions and must be defined also if no external forces are requested
         self.lj_sig = -1000
@@ -281,7 +287,7 @@ class base:
             self.lj_cutoff  = external_forces['r_vdw']
             self.lj_buffer  = external_forces['r_list']
 
-            #Precalculate constant part of long-range correction
+            #Precalculate constant part of long-range correction for potential energy
             self.E_lrc_const = self.N**2 * np.pi * self.lj_eps * self.lj_sig**2 * (0.4 * (self.lj_sig / self.lj_cutoff)**10 - (self.lj_sig / self.lj_cutoff)**4)
             
             #Init empty pairlist -> Will be changed in the first step of the simulations
@@ -323,25 +329,32 @@ class base:
         if self.pressure_coupling is True:
 
             #Set default values
-            self.ref_p = 7                          #Reference pressure (tension) in mN/m
-            self.compressibility = 1/230            #Isothermal area compressibility in m/mN
-            self.tau_p = 0.001                      #Rate of pressure adjustment in ns
-            self.thresh_p = 1e-16                   #Threshold for coupling to ref_p
+            self.ref_p = 0                          #Reference pressure (tension) in mN/m
+            self.compressibility = 4.5e-5            #Isothermal area compressibility in m/mN
+            self.tau_p = 0.01                      #Rate of pressure adjustment in ns
+            self.thresh_p = 1e-21                   #Threshold for coupling to ref_p
+            self.nstpcouple = 1                     #Rescaling frequency
+            self.K_A = 226                          #Area compressibility
+            self.ref_A = self.area               #Reference area
 
         elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
 
             #Check for unknown keys
-            unknown = set(self.pressure_coupling) - {'ref_p', 'compressibility', 'tau_p', 'thresh_p'}
+            unknown = set(self.pressure_coupling) - {'ref_p', 'compressibility', 'tau_p', 'thresh_p', 'nstpcouple', 'K_A', 'ref_A'}
             if unknown: raise KeyError(f"Unknown key(s) pressure_coupling: {unknown}")
 
             # Set given values if present, otherwise set default values
-            for k, v in zip(['ref_p', 'compressibility', 'tau_p', 'thresh_p'], [1, 45.2472 * 1E-6, 0.001, 0.005]):
+            for k, v in zip(['ref_p', 'compressibility', 'tau_p', 'thresh_p', 'nstpcouple', 'K_A', 'ref_A'], [0, 4.5e-5, 0.01, 1e-21, 1, 226, self.area]):
 
                 if k in self.pressure_coupling: setattr(self, k, self.pressure_coupling[k])
                 else: setattr(self, k, v)
 
-            if self.ref_p < 0 or self.compressibility < 0 or self.tau_p < 0:
+            if self.ref_p < 0 or self.compressibility < 0 or self.tau_p < 0 or self.thresh_p < 0:
                 raise ValueError("Pressure coupling parameters must be positive!")
+
+            assert self.nsteps % self.nstpcouple == 0, "Frequency of pressure coupling (nstpcouple) must be multiple of number of steps!"
+
+            self.nstpcouple = int(self.nstpcouple)
 
         #Disable pressure coupling when dict is empty or pressure_coupling is set as False
         else: self.pressure_coupling = False
@@ -350,6 +363,8 @@ class base:
         if self.pressure_coupling != False:
 
             if any(external_forces):
-                self.p_lrc_const = 12 * N**2 * np.pi * self.lj_eps * self.lj_sig**2 * (0.2 * (self.lj_sig / self.lj_cutoff)**10 - 0.25 * (self.lj_sig / self.lj_cutoff)**4)
+                self.p_lrc_const = 12 * self.N**2 * np.pi * self.lj_eps * self.lj_sig**2 * (0.2 * (self.lj_sig / self.lj_cutoff)**10 - 0.25 * (self.lj_sig / self.lj_cutoff)**4)
+                #self.p_lrc_const = 6/5 * N**2 * np.pi * self.lj_eps * self.lj_sig**2 * (0.4 * (self.lj_sig / self.lj_cutoff)**10 - 0.25 * (self.lj_sig / self.lj_cutoff)**4)
+
 
             else : self.p_lrc_const = 0

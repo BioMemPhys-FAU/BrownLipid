@@ -15,6 +15,8 @@ pytest = "^8.3.4"
 numba = "^0.61.0"
 requests = {version = "^2.32.3", platform = "arm64"}
 jupyter = "^1.1.1"
+mdanalysis = "^2.10.0"
+tidynamics = "^1.1.2"
 
 
 [build-system]
