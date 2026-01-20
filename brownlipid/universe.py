@@ -1,5 +1,4 @@
 # ----PYTHON---- #
-from typing import Union, Dict, Any
 
 #Math
 import numpy as np
@@ -16,7 +15,6 @@ import time
 import datetime
 import json
 import os
-import platform
 
 #from tests.utils_test import pbc_dim
 #Own modules

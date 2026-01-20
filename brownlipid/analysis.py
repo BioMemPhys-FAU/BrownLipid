@@ -5,36 +5,19 @@ import tidynamics
 import tqdm
 
 import brownlipid
+from .base import base
 from brownlipid import pressure
 from brownlipid import utils
 from brownlipid import force
 
 '''
-Analysis of BrownLipid simulations for parameters from coarse grained simulations.
+Analysis of BrownLipid simulations.
 
-Comparison of area per lipid, diffusion coefficient and radial distribution function (RDF).
-
-The diffusion coefficients and Lennard-Jones parameters were determined 
-for the center of mass of the whole lipids and their headgroups separately.
 
 '''
 
-class Analysis:
-    def __init__(self, file):
-        #Load parameters
-        self.params = utils.load_params(file)
+class Analysis(base):
 
-        #Unpack and define parameters
-        for k, v in self.params.items():
-            if isinstance(v, dict):
-                #Unpack dictionaries
-                for sub_k, sub_v in v.items():
-                    setattr(self, sub_k, sub_v)
-            else:
-                setattr(self, k, v)
-
-    #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    #Analysis part
     def load_data_unwrap(self, block = None, skip = 1):
 
         try:
@@ -243,18 +226,16 @@ class Analysis:
 
         return tau, msd, sd_per_particle
 
-    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
+    def get_rdf(self, exp_density, begin = 0, stop = None, skip = 1, block = None, r_max = 5, binwidth = 0.5, bulk = False):
 
         """
-        Mean Square Displacement
+        Radial Distribution Function
 
-        Calculate the Mean Square Displacement of the particles for different lag times.
+        Calculates the radial distribution function (RDF), g(r), and the cumulative distribution function (CDF) for the particle system.
 
         Parameters
         ----------
 
-        skip := float
-            Skip lag times to decrease calculation time (ns)
         begin := float
             Start time for analysis (ns)
         stop := float
@@ -267,10 +248,8 @@ class Analysis:
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
 
         if block == None: block = np.arange( self.N )
-        if skip  == None: skip  = self.dt / self.nstxout
 
         #Convert time to frames
-        skip  = int( np.round( skip  / self.dt / self.nstxout ) )
         begin = int( np.round( begin / self.dt / self.nstxout ) ) // skip
         stop  = int( np.round( stop  / self.dt / self.nstxout ) ) // skip
 
