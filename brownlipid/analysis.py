@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import scipy
 import tidynamics
 import tqdm
+import MDAnalysis as mda
+from MDAnalysis.coordinates.memory import MemoryReader
 
 import brownlipid
 from .base import base
@@ -35,19 +37,19 @@ class Analysis(base):
 
             if chk_number == "1":
 
-                self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")[::skip, block, :] ))
-                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")[::skip] )
+                self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")[:, block, :] ))
+                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy"))
 
             else:
 
-                data = np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")
+                data = np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")
                 time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
 
-                start_idx = np.where( (time / self.dt ).astype(int) % skip == 0 )[0][0]
-                #select_idx = np.where( (time / self.dt ).astype(int) % skip == 0 )[0]
+                self.u_storage  = np.vstack( (self.u_storage, data[:, block, :] ))
+                self.time_array = np.append( self.time_array, time  )
 
-                self.u_storage  = np.vstack( (self.u_storage, data[start_idx::skip, block, :] ))
-                self.time_array = np.append( self.time_array, time[start_idx::skip]  )
+        self.u_storage = self.u_storage[::skip, :, :]
+        self.time_array = self.time_array[::skip]
 
         #Validation
         assert self.u_storage.shape[0] == self.nsteps // self.nstxout // skip + 1, "Number of frames is not correct!"
@@ -59,13 +61,14 @@ class Analysis(base):
 
         return 1
 
+
     def load_data_wrap(self, block = None, skip = 1):
 
         try:
             if self.w_storage.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
         except: pass
 
-        if block == None: block = np.arange( self.N )
+        if type(block) == type(None): block = np.arange( self.N )
 
         self.w_storage  = np.zeros( (0, len(block), 2), dtype = np.float32 )
         self.time_array = np.zeros( (0)               , dtype = np.float32 )
@@ -76,18 +79,19 @@ class Analysis(base):
 
             if chk_number == "1":
 
-                self.w_storage  = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")[::skip, block, :] ))
-                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")[::skip] )
+                self.w_storage  = np.vstack( (self.w_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")[:, block, :] ))
+                self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy"))
 
             else:
 
                 data = np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")
                 time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
 
-                start_idx = np.where( (time // self.dt) % skip == 0 )[0][0]
+                self.w_storage  = np.vstack( (self.w_storage, data[:, block, :] ))
+                self.time_array = np.append( self.time_array, time  )
 
-                self.w_storage  = np.vstack( (self.w_storage, data[start_idx::skip, block, :] ))
-                self.time_array = np.append( self.time_array, time[start_idx::skip]  )
+        self.w_storage = self.w_storage[::skip, :, :]
+        self.time_array = self.time_array[::skip]
 
         print(f"Check {chk_number}: {self.time_array[-1]}")
 
@@ -98,6 +102,7 @@ class Analysis(base):
         assert np.allclose( self.dt * self.nstxout * skip, np.diff( self.time_array ), rtol = 0, atol = 1E-3 ), "Time step distance is not as expected!"
 
         return 1
+
 
     def load_data_area(self, skip = 1):
 
@@ -113,21 +118,21 @@ class Analysis(base):
 
             if chk_number == "1":
 
-                self.Area = np.append(self.Area, np.load(self.output + f'_Area.{chk_number.zfill(5)}.npy')[::skip])
+                self.Area = np.append(self.Area, np.load(self.output + f'_Area.{chk_number.zfill(5)}.npy'))
 
             else:
 
                 data = np.load(self.output + f'_Area.{chk_number.zfill(5)}.npy')
-                time = np.load(self.output + f'_time.{chk_number.zfill(5)}.npy')
 
-                start_idx = np.where((time // self.dt) % skip == 0)[0][0]
+                self.Area = np.append(self.Area, data)
 
-                self.Area = np.append(self.Area, data[start_idx::skip])
+        self.Area = self.Area[::skip]
 
         #Validation
         assert self.Area.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.Area.shape[0]}"
 
         return 1
+
 
     def load_data_pressure(self, skip = 1):
 
@@ -143,16 +148,15 @@ class Analysis(base):
 
             if chk_number == "1":
 
-                self.Pressure = np.append(self.Pressure, np.load(self.output + f'_Pressure.{chk_number.zfill(5)}.npy')[::skip])
+                self.Pressure = np.append(self.Pressure, np.load(self.output + f'_Pressure.{chk_number.zfill(5)}.npy'))
 
             else:
 
                 data = np.load(self.output + f'_Pressure.{chk_number.zfill(5)}.npy')
-                time = np.load(self.output + f'_time.{chk_number.zfill(5)}.npy')
 
-                start_idx = np.where((time // self.dt) % skip == 0)[0][0]
+                self.Pressure = np.append(self.Pressure, data)
 
-                self.Pressure = np.append(self.Pressure, data[start_idx::skip])
+        self.Pressure = self.Pressure[::skip]
 
         #Validation
         assert self.Pressure.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.Pressure.shape[0]}"
@@ -160,12 +164,12 @@ class Analysis(base):
         return 1
 
 
-    def mean_square_displacement(self, begin = 0, stop = None, skip = 1, fft = True, block = None):
+    def mean_square_displacement(self, begin = 0, stop = None, skip = None, fft = True, block = None):
 
         """
         Mean Square Displacement
 
-        Calculate the Mean Square Displacement of the particles for different lag times.
+        Calculate the Mean Square Displacement of selected particles for different lag times.
 
         Parameters
         ----------
@@ -174,16 +178,26 @@ class Analysis(base):
             Start time for analysis (ns)
         stop := float
             Stop time for analysis (ns)
+        skip := float
+            Time to skip between frames for analysis (ns)
+        block := array
+            Indices of particles to include in the analysis. If None, all particles are considered
+        fft := bool
+            Use Fourier Transforms
+
         """
 
         if stop == None: stop = self.nsteps * self.dt
+        if skip == None: skip = self.dt * self.nstxout
 
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
 
         if type(block) == type(None): block = np.arange( self.N )
 
         #Convert time to frames
+        skip  = int( np.round( skip  / self.dt / self.nstxout) )
         begin = int( np.round( begin / self.dt / self.nstxout ) // skip)
         stop  = int( np.round( stop  / self.dt / self.nstxout ) // skip) + 1
 
@@ -226,30 +240,45 @@ class Analysis(base):
 
         return tau, msd, sd_per_particle
 
-    def get_rdf(self, exp_density, begin = 0, stop = None, skip = 1, block = None, r_max = 5, binwidth = 0.5, bulk = False):
+    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
 
         """
         Radial Distribution Function
 
-        Calculates the radial distribution function (RDF), g(r), and the cumulative distribution function (CDF) for the particle system.
+        Calculates the radial distribution function (RDF), g(r), and the cumulative distribution function (CDF) for the selected particles.
 
         Parameters
         ----------
-
+        exp_density : float
+            Density of the system (1/nm^2)
         begin := float
             Start time for analysis (ns)
         stop := float
             Stop time for analysis (ns)
+        skip := float
+            Time to skip between frames for analysis (ns)
+        block : array_like, optional
+            Indices of particles to include in the analysis. If None, all particles are considered
+        r_max : float
+            Maximum radius for RDF calculation (ns)
+        binwidth : float
+            Width of the bins for the RDF histogram
+        bulk : bool
+            If True, calculates the RDF for a bulk system, otherwise for a self-RDF
+
         """
 
         if stop == None: stop = self.nsteps * self.dt
+        if skip == None: skip = self.dt * self.nstxout
 
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
 
         if block == None: block = np.arange( self.N )
 
         #Convert time to frames
+        skip  = int( np.round( skip  / self.dt / self.nstxout) )
         begin = int( np.round( begin / self.dt / self.nstxout ) ) // skip
         stop  = int( np.round( stop  / self.dt / self.nstxout ) ) // skip
 
@@ -263,7 +292,7 @@ class Analysis(base):
         print("")
 
         #Load data
-        self.load_data_wrap(skip = skip)
+        self.load_data_wrap(skip = skip, block=block)
 
         w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
 
@@ -575,23 +604,122 @@ class Analysis(base):
         #plt.ylabel('Number of Trajectories')
         #plt.xlabel(r'MSD / $\mu$m$^2$')
 
-    def area_per_lipid(self, begin = 0, stop = None):
-
-        APL = 0
+    def export_trajectory(self, atomname = 'B1', resname = 'LIP', output = None, pml_file = False, begin=0, stop=None, skip=1, block = None):
 
         """
-        Area per lipid
-    
-        Calculate the area per lipid in a specific time interval.
-    
+        Export trajectory to gromacs format
+
+
         Parameters
         ----------
-    
+
+        atomname := str
+            Atom name to be written to the output .gro file
+        resname := str
+            Residue name to be written to the output .gro file
+        output := str
+            Name for the output .gro and .xtc files which gets appended to the standard output (self.output)
+        pml_file := bool or str
+            Generate a PyMOL script to load the trajectory automatically with bead radius = sigma / 2
         begin := float
-            Start time for analysis (ns)
+            Start time for export (ns)
         stop := float
-            Stop time for analysis (ns)
+            Stop time for export (ns)
+        skip := float
+            Time to skip between frames for analysis (ns)
+        block := array
+            Indices of particles to include in the analysis. If None, all particles are considered
+
         """
 
-        return APL
+        if output == None: output = self.output + '_trajectory'
 
+        if stop == None: stop = self.nsteps * self.dt
+
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
+
+        #Convert time to frames
+        skip  = int( np.round( skip  / self.dt / self.nstxout) )
+        begin = int( np.round( begin / self.dt / self.nstxout ) // skip)
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) // skip) + 1
+
+        if type(block) == type(None): block = np.arange( self.N )
+        N_analysis = len(block)
+
+        #Number of steps for analysis
+        nsteps_analysis = (stop - begin)
+
+        print(f"Loading data...")
+        print(f"Start: Frame {begin}")
+        print(f"Stop : Frame {stop}")
+        print("")
+
+        #Load data
+        self.load_data_wrap(skip = skip, block = block)
+
+        w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
+
+        assert nsteps_analysis == w_storage_analysis.shape[0], 'Not correct number of frames'
+
+        traj = np.zeros((nsteps_analysis, N_analysis, 3), dtype = np.float32)
+        traj[:,:,0:2] = w_storage_analysis * 10 #MDA uses Angström
+
+        self.load_data_area(skip = skip)
+
+        area_analysis = np.copy( self.Area[begin:stop] )
+        L = np.sqrt(area_analysis) * 10 #MDA uses Angström
+
+        #Define box dimension with format: [Lx, Ly, Lz, alpha, beta, gamma]
+        dim = np.column_stack((L, L, np.ones(nsteps_analysis), np.full(nsteps_analysis, 90), np.full(nsteps_analysis, 90), np.full(nsteps_analysis, 90)))
+
+
+        #Create empty MDA universe
+        u = mda.Universe.empty(n_atoms=N_analysis, n_residues=N_analysis, atom_resindex=block, trajectory=True)
+
+        #Add topology
+        u.add_TopologyAttr('resname', [resname] * N_analysis)
+        u.add_TopologyAttr('name', [atomname] * N_analysis)
+
+        #Load trajectory
+        u.load_new(traj, order='fac', dimensions=dim)
+
+        print(f"Starting export...\n")
+
+        #Write .gro and .xtc files
+
+        #Save first frame
+        u.trajectory[0]
+        u.atoms.write(f'{output}.gro')
+
+        #Write .xtc trajectory
+        with mda.Writer(f'{output}.xtc', n_atoms=N_analysis) as W:
+            for ts in u.trajectory:
+                W.write(u)
+
+        print(f'Export finished!\nCreated {output}.gro and {output}.xtc')
+
+        if pml_file:
+
+            #Use sigma as distance => sigma/2 as radius of bead
+            vdw_r = self.lj_sig / 2 * 10 #MDA uses Angström
+
+            pml_content = f"""
+            
+            load {output}.gro
+            load {output}.xtc
+            
+            show cell
+            
+            alter all, vdw={vdw_r:.4g}
+
+            """
+
+            if type(pml_file) == type(True): output = self.output + '_trajectory_script'
+            else: output = self.output + pml_file
+
+            with open(f'{output}.pml', 'w') as f:
+                f.write(pml_content)
+
+            print(f'Created {output}.pml')
