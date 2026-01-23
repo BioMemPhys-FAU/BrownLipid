@@ -133,6 +133,10 @@ def distance_matrix_NxN(pos, N, pbc_dim, offsets):
 
         #Apply periodic boundary conditions
         for k, size in zip(pbc_dim[0], pbc_dim[1]):
+
+            k = int(k)
+            assert k in [0, 1], 'PBC dimension must be either 0 or 1'
+
             rij[:, k] = np.where(rij[:, k] >    size / 2, rij[:, k] - size, rij[:, k])
             rij[:, k] = np.where(rij[:, k] <= - size / 2, rij[:, k] + size, rij[:, k])
 
@@ -180,6 +184,9 @@ def apply_pbc_vector_3dim(vec, pbc_dim) -> np.ndarray:
         
         #Apply PBC
         for i, size in zip(pbc_dim[0], pbc_dim[1]):
+
+            i = int(i)
+
             vec[:, :, i] = np.where(vec[:, :, i] >    size / 2, vec[:, :, i] - size, vec[:, :, i])
             vec[:, :, i] = np.where(vec[:, :, i] <= - size / 2, vec[:, :, i] + size, vec[:, :, i])
 
@@ -528,7 +535,7 @@ def vector_field(pos, displacement, nx, ny, grid, idx_grid,  pbc_dim):
     return store_vector / divid_vector
 
 #@jit(nopython=True)
-def self_rdf(pos, pbc_dim, r_max, binwidth, exp_density):
+def self_rdf(pos, pbc_dim, r_max, binwidth, area, exp_density):
 
     nFrames, N, _ = pos.shape
 
@@ -544,12 +551,18 @@ def self_rdf(pos, pbc_dim, r_max, binwidth, exp_density):
     shell_area    = np.pi * (edges[1:]**2 - edges[:-1]**2)
     binmids       = (edges[1:] + edges[:-1]) / 2
 
+    L = np.sqrt(area)
+    pbc_dim_analysis = np.array([pbc_dim[0], np.zeros(2)])
+
     rdf = np.zeros( (nFrames, len(binmids) ) )
     cdf = np.zeros( (nFrames, len(binmids) ) )
+    pdf = np.zeros( (nFrames, len(binmids) ) )
 
     for i in tqdm( range(nFrames) ):
 
-        dist, vec = distance_matrix_NxN(pos = pos[i], N = N, pbc_dim = pbc_dim, offsets = np.zeros((N, N), dtype = np.float32))
+        pbc_dim_analysis[1,:] = L[i]
+
+        dist, vec = distance_matrix_NxN(pos = pos[i], N = N, pbc_dim = pbc_dim_analysis, offsets = np.zeros((N, N), dtype = np.float32))
 
         dist = dist.flatten()
 
@@ -559,10 +572,12 @@ def self_rdf(pos, pbc_dim, r_max, binwidth, exp_density):
 
         rdf[i]  = 2 * hist / shell_area / (N-1) / exp_density
         cdf[i]  = np.cumsum( 2 * hist / (N-1) )
+        #pdf[i]  = hist / (N-1)
+        pdf[i] = hist / (np.sum(hist) * binwidth)
 
-    return binmids, rdf, cdf
+    return binmids, rdf, cdf, pdf
 
-def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, domain_coords, radii, rmin):
+def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, area, domain_coords, radii, rmin):
 
     nFrames, N, _ = pos.shape
 
@@ -578,21 +593,27 @@ def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, domain_coords, rad
     shell_area    = np.pi * (edges[1:]**2 - edges[:-1]**2)
     binmids       = (edges[1:] + edges[:-1]) / 2
 
+    L = np.sqrt(area)
+    pbc_dim_analysis = np.array([pbc_dim[0], np.zeros(2)])
+
     rdf = np.zeros( (nFrames, len(binmids) ) )
     cdf = np.zeros( (nFrames, len(binmids) ) )
+    pdf = np.zeros( (nFrames, len(binmids) ) )
 
     radii_sq = (radii + 3 * rmin)**2
 
     for i in tqdm( range(nFrames) ):
 
-        dist2mids = apply_pbc_vector_3dim(vec = pos[i][:, None, :] - domain_coords[None, :, :], pbc_dim = pbc_dim)
+        pbc_dim_analysis[1,:] = L[i]
+
+        dist2mids = apply_pbc_vector_3dim(vec = pos[i][:, None, :] - domain_coords[None, :, :], pbc_dim = pbc_dim_analysis)
 
         dist2mids = np.sum( dist2mids**2, axis = -1) 
 
         bulk_mask = np.all( dist2mids > radii_sq, axis = 1)
         N_eff     = bulk_mask.sum()
 
-        dist, vec = distance_matrix_NxN(pos = pos[i][bulk_mask], N = N_eff, pbc_dim = pbc_dim, offsets = np.zeros((N_eff, N_eff), dtype = np.float32))
+        dist, vec = distance_matrix_NxN(pos = pos[i][bulk_mask], N = N_eff, pbc_dim = pbc_dim_analysis, offsets = np.zeros((N_eff, N_eff), dtype = np.float32))
 
         dist = dist.flatten()
 
@@ -602,5 +623,6 @@ def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, domain_coords, rad
 
         rdf[i]  = 2 * hist / shell_area / (N_eff-1) / exp_density
         cdf[i]  = np.cumsum( 2 * hist / (N_eff-1) )
+        pdf[i] = hist / (np.sum(hist) * binwidth)
 
-    return binmids, rdf, cdf
+    return binmids, rdf, cdf, pdf

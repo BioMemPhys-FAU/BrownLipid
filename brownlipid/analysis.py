@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy
 import tidynamics
-import tqdm
+from tqdm import tqdm
 import MDAnalysis as mda
 from MDAnalysis.coordinates.memory import MemoryReader
 
@@ -192,7 +192,7 @@ class Analysis(base):
 
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
+        assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
 
         if type(block) == type(None): block = np.arange( self.N )
 
@@ -202,7 +202,6 @@ class Analysis(base):
         stop  = int( np.round( stop  / self.dt / self.nstxout ) // skip) + 1
 
         #Number of steps for analysis
-        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
         nsteps_analysis = (stop - begin) // skip
 
         print(f"Calculating MSD...")
@@ -245,7 +244,7 @@ class Analysis(base):
         """
         Radial Distribution Function
 
-        Calculates the radial distribution function (RDF), g(r), and the cumulative distribution function (CDF) for the selected particles.
+        Calculates the radial distribution function (RDF) and the cumulative distribution function (CDF) for the selected particles.
 
         Parameters
         ----------
@@ -268,12 +267,12 @@ class Analysis(base):
 
         """
 
-        if stop == None: stop = self.nsteps * self.dt
-        if skip == None: skip = self.dt * self.nstxout
+        if type(stop) == type(None): stop = self.nsteps * self.dt
+        if type(skip) == type(None): skip = self.dt * self.nstxout
 
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
+        assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
 
         if block == None: block = np.arange( self.N )
 
@@ -296,12 +295,15 @@ class Analysis(base):
 
         w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
 
+        self.load_data_area(skip = skip)
+        area_analysis = np.copy( self.Area[begin:stop] )
+
         assert nsteps_analysis == w_storage_analysis.shape[0], 'Not correct number of frames'
 
-        if bulk: binmids, rdf, cdf = utils.self_bulk_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
-        else:    binmids, rdf, cdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
+        if bulk: binmids, rdf, cdf, pdf = utils.self_bulk_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, area = area_analysis, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
+        else:    binmids, rdf, cdf, pdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
 
-        return binmids, rdf.mean(0), cdf.mean(0)
+        return binmids, rdf.mean(0), cdf.mean(0), pdf.mean(0)
 
     def mean_square_displacement_1d(self, direction, skip, begin = 0, stop = None, max_lag = "max", fft=True):
 
@@ -632,13 +634,18 @@ class Analysis(base):
 
         """
 
-        if output == None: output = self.output + '_trajectory'
+        if type(output) == type(None): output = self.output + '_trajectory'
+        else:
+            assert type(output) == str, 'output must be a string!'
+            output = self.output + '_' + output
 
-        if stop == None: stop = self.nsteps * self.dt
+        if type(stop) == type(None): stop = self.nsteps * self.dt
+        if type(skip) == type(None): skip = self.dt * self.nstxout
 
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        assert (stop - begin) % skip == 0, 'Number of frames is not divisible by skip!'
+        assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
+        assert type(pml_file) in [bool, str], 'pml_file must be a boolean or a string!'
 
         #Convert time to frames
         skip  = int( np.round( skip  / self.dt / self.nstxout) )
@@ -673,7 +680,6 @@ class Analysis(base):
 
         #Define box dimension with format: [Lx, Ly, Lz, alpha, beta, gamma]
         dim = np.column_stack((L, L, np.ones(nsteps_analysis), np.full(nsteps_analysis, 90), np.full(nsteps_analysis, 90), np.full(nsteps_analysis, 90)))
-
 
         #Create empty MDA universe
         u = mda.Universe.empty(n_atoms=N_analysis, n_residues=N_analysis, atom_resindex=block, trajectory=True)
@@ -723,3 +729,82 @@ class Analysis(base):
                 f.write(pml_content)
 
             print(f'Created {output}.pml')
+
+
+    def get_pair_distances(self, begin=0, stop=None, skip=None, block = None):
+
+        """
+        Calculates the pair distances for the specified particles within the given time range
+
+
+
+        Parameters
+        ----------
+
+        begin := float
+            Start time for export (ns)
+        stop := float
+            Stop time for export (ns)
+        skip := float
+            Time to skip between frames for analysis (ns)
+        block := array
+            Indices of particles to include in the analysis. If None, all particles are considered
+
+        Returns
+        -------
+        pair_distances := np.ndarray
+            Flat array of all pair distances calculated.
+
+        """
+
+        if type(stop) == type(None): stop = self.nsteps * self.dt
+        if type(skip) == type(None): skip = self.dt * self.nstxout
+
+        assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
+        assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
+
+        #Convert time to frames
+        skip  = int( np.round( skip  / self.dt / self.nstxout) )
+        begin = int( np.round( begin / self.dt / self.nstxout ) // skip)
+        stop  = int( np.round( stop  / self.dt / self.nstxout ) // skip) + 1
+
+        if type(block) == type(None): block = np.arange( self.N )
+        N_analysis = len(block)
+
+        #Number of steps for analysis
+        nsteps_analysis = (stop - begin)
+
+        print(f"Calculating pair distances...")
+        print(f"Start: Frame {begin}")
+        print(f"Stop : Frame {stop}")
+        print("")
+
+        self.load_data_wrap(skip = skip, block = block)
+        w_storage_analysis = np.copy(self.w_storage[begin:stop, :, :])
+
+        self.load_data_area(skip = skip)
+        area_analysis = np.copy( self.Area[begin:stop] )
+        L = np.sqrt(area_analysis)
+
+        pbc_dim_analysis = np.array([self.pbc_dim[0], np.zeros(2)])
+
+        distances = []
+
+        for i in tqdm(range(nsteps_analysis)):
+
+            pbc_dim_analysis[1,:] = L[i]
+
+            dist_mat, _ = utils.distance_matrix_NxN(
+                pos = w_storage_analysis[i, :, :],
+                N = N_analysis,
+                pbc_dim = pbc_dim_analysis,
+                offsets = self.offsets
+            )
+
+            #Append only valid distances (not inf)
+            distances.append(dist_mat[np.isfinite(dist_mat)])
+
+        self.pair_distances = np.concatenate(distances)
+
+        return self.pair_distances
