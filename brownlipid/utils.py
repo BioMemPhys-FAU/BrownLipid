@@ -572,8 +572,7 @@ def self_rdf(pos, pbc_dim, r_max, binwidth, area, exp_density):
 
         rdf[i]  = 2 * hist / shell_area / (N-1) / exp_density
         cdf[i]  = np.cumsum( 2 * hist / (N-1) )
-        #pdf[i]  = hist / (N-1)
-        pdf[i] = hist / (np.sum(hist) * binwidth)
+        pdf[i]  = hist #/ (np.sum(hist) * binwidth)
 
     return binmids, rdf, cdf, pdf
 
