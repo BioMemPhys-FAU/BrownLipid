@@ -7,6 +7,7 @@ import sys
 
 from . import utils
 from .utils import load_params
+from . import force
 
 
 class base:
@@ -32,6 +33,7 @@ class base:
                diffusion_domains:                    float = 0.0,
                  external_forces:                     dict = {},
                             temp:                    float = 298,
+               langevin_dynamics:                     dict = {},
                pressure_coupling:        Union[bool, dict] = {},
                           output:                      str = 'output'
 
@@ -79,6 +81,7 @@ class base:
             self.diffusion_domains    = diffusion_domains
             self.softwall             = softwall
             self.pressure_coupling    = pressure_coupling
+            self.langevin_dynamics    = langevin_dynamics
 
         #Precalculation
         self.area                   = self.size_x * self.size_y
@@ -324,27 +327,60 @@ class base:
         self.in_domains = np.zeros( self.N, dtype = bool )
 
         #----------------------------------------------------------------------------------------------------------------------------------------------
+        #Initialize for langevin dynamics
+
+        if self.langevin_dynamics != False and isinstance(self.langevin_dynamics, dict):
+
+            if len(self.langevin_dynamics) != 0:
+
+                #Check for unknown keys
+                unknown = set(self.langevin_dynamics) - {'mass'}
+                if unknown: raise KeyError(f"Unknown key(s) in langevin_dynamics: {unknown}")
+
+                #Set given values if present, otherwise set default values
+                for k, v in zip(['mass'],
+                                [750]):
+
+                    if k in self.langevin_dynamics:
+                        setattr(self, k, self.langevin_dynamics[k])
+                    else:
+                        setattr(self, k, v)
+
+                if self.mass < 0: raise ValueError("mass must be positive!")
+                if self.base_d_coeff <= 0: raise ValueError("base_d_coeff must be >0!")
+
+                #Mass in g/mol
+                self.gamma = 1.38 * self.temp * 6.022 * 1e3 / (self.mass * self.base_d_coeff) # 1/ns
+
+                self.c1 = np.exp(-self.gamma * self.dt)
+                self.c3 = np.sqrt((1-self.c1**2) * self.mass * 1.38 * self.temp * 6.022 * 1e-3)  # kg * nm / (ns * mol) = 10^-3 * kJ * ns / (nm * mol)
+
+            # Disable langevin when dict is empty
+            else: self.langevin_dynamics = False
+
+
+        #----------------------------------------------------------------------------------------------------------------------------------------------
         #Initialize for pressure coupling
 
         if self.pressure_coupling is True:
 
             #Set default values
             self.ref_p = 0                          #Reference pressure (tension) in mN/m
-            self.compressibility = 4.5e-5            #Isothermal area compressibility in m/mN
+            self.compressibility = 5.6e-05            #Isothermal compressibility in m/mN
             self.tau_p = 0.01                      #Rate of pressure adjustment in ns
             self.thresh_p = 1e-21                   #Threshold for coupling to ref_p
             self.nstpcouple = 1                     #Rescaling frequency
-            self.K_A = 226                          #Area compressibility
+            self.K_A = 225                          #Area compressibility
             self.ref_A = self.area               #Reference area
 
         elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
 
             #Check for unknown keys
             unknown = set(self.pressure_coupling) - {'ref_p', 'compressibility', 'tau_p', 'thresh_p', 'nstpcouple', 'K_A', 'ref_A'}
-            if unknown: raise KeyError(f"Unknown key(s) pressure_coupling: {unknown}")
+            if unknown: raise KeyError(f"Unknown key(s) in pressure_coupling: {unknown}")
 
             # Set given values if present, otherwise set default values
-            for k, v in zip(['ref_p', 'compressibility', 'tau_p', 'thresh_p', 'nstpcouple', 'K_A', 'ref_A'], [0, 4.5e-5, 0.01, 1e-21, 1, 226, self.area]):
+            for k, v in zip(['ref_p', 'compressibility', 'tau_p', 'thresh_p', 'nstpcouple', 'K_A', 'ref_A'], [0, 5.6e-05, 0.01, 1e-21, 1, 225, self.area]):
 
                 if k in self.pressure_coupling: setattr(self, k, self.pressure_coupling[k])
                 else: setattr(self, k, v)

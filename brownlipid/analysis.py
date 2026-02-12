@@ -37,12 +37,12 @@ class Analysis(base):
 
             if chk_number == "1":
 
-                self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")[:, block, :] ))
+                self.u_storage  = np.vstack( (self.u_storage, np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")[:, block, :] ))
                 self.time_array = np.append( self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy"))
 
             else:
 
-                data = np.load(self.output + f"_wrap.{chk_number.zfill(5)}.npy")
+                data = np.load(self.output + f"_unwrap.{chk_number.zfill(5)}.npy")
                 time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
 
                 self.u_storage  = np.vstack( (self.u_storage, data[:, block, :] ))
@@ -160,6 +160,52 @@ class Analysis(base):
 
         #Validation
         assert self.Pressure.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.Pressure.shape[0]}"
+
+        return 1
+
+    def load_data_velocity(self, block=None, skip=1):
+
+        try:
+            if self.Velocity.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
+        except:
+            pass
+
+        if type(block) == type(None): block = np.arange(self.N)
+
+        self.Velocity = np.zeros((0, len(block), 2), dtype=np.float32)
+        self.time_array = np.zeros((0), dtype=np.float32)
+
+        for chk_number in range(1, self.nsteps // self.nstchk + 1):
+
+            chk_number = str(chk_number)
+
+            if chk_number == "1":
+
+                self.Velocity = np.vstack(
+                    (self.Velocity, np.load(self.output + f"_Velocity.{chk_number.zfill(5)}.npy")[:, block, :]))
+                self.time_array = np.append(self.time_array, np.load(self.output + f"_time.{chk_number.zfill(5)}.npy"))
+
+            else:
+
+                data = np.load(self.output + f"_Velocity.{chk_number.zfill(5)}.npy")
+                time = np.load(self.output + f"_time.{chk_number.zfill(5)}.npy")
+
+                self.Velocity = np.vstack((self.Velocity, data[:, block, :]))
+                self.time_array = np.append(self.time_array, time)
+
+        self.Velocity = self.Velocity[::skip, :, :]
+        self.time_array = self.time_array[::skip]
+
+        print(f"Check {chk_number}: {self.time_array[-1]}")
+
+        # Validation
+        assert self.Velocity.shape[0] == (
+                    self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.Velocity.shape[0]}"
+
+        assert np.allclose(np.diff(self.time_array), self.dt * self.nstxout * skip, rtol=0,
+                           atol=1E-3), "Time step distance is not as expected!"
+        assert np.allclose(self.dt * self.nstxout * skip, np.diff(self.time_array), rtol=0,
+                           atol=1E-3), "Time step distance is not as expected!"
 
         return 1
 

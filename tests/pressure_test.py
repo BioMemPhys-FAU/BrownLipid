@@ -102,9 +102,30 @@ def test_scaling_calc():
 
 def test_pressure_adjustment(
         #input = '/Volumes/lacie_1/elias/cg_mem_run/analysis/parameter_files/DPPC_whole_lipid_params.json',
-        input = '/Users/eliasnickel/bl_run/Dcoeff_vali/TOR/TOR_7_run_info.json',
+        input = '/Users/eliasnickel/Documents/langevin_run/langevin_run_info.json',
 
-        fit_start = 0.53,       #fraction of total time
+        #DOPC
+        L = 8.212,
+        N = 100,
+        nsteps = int(1e7),
+        dt = 5e-5,
+        temp = 310,
+        nstxout = 1,
+        output = 'pressure_test/output',
+
+        base_d_coeff = 0.0562331773557475,
+        external_forces={'epsilon': 0.080, 'sigma': 0.60921, 'r_vdw': 1.2, 'r_list':2.0, 'nstlist':2, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
+        ref_p = 0,
+        compressibility = 5.6e-05,
+        tau_p = 0.01,
+        K_A = 240.705,
+        ref_A = 66.1103,
+        thresh_p = 1e-21,
+        nstpcouple = 1,
+
+        langevin_dynamics={'mass': 828.0},
+
+        fit_start = 0.37,       #fraction of total time
         test_tol = 1.8,
         xlim = [],              #[xl,xr] with Fraction of total time or False
         ylim = True,            #y-scaling in the xlim interval
@@ -113,9 +134,25 @@ def test_pressure_adjustment(
         t_equ = 20             #for correlation
         ):
 
-    uni = brownlipid.Universe(input_file = input)
+    '''nstchk = nsteps
 
-    #uni.evolve()
+    uni = brownlipid.Universe(  input_file=False,
+                                size_x=L,
+                                size_y=L,
+                                N=N,
+                                nsteps=nsteps,
+                                dt=dt,
+                                temp=temp,
+                                nstxout=nstxout,
+                                base_d_coeff= base_d_coeff,
+                                nstchk=nstchk,
+                                output=output,
+                                external_forces=external_forces,
+                                pressure_coupling={'ref_p': ref_p, 'compressibility': compressibility, 'tau_p': tau_p, 'K_A': K_A, 'ref_A': ref_A, 'thresh_p': thresh_p, 'nstpcouple': nstpcouple},
+                                langevin_dynamics=langevin_dynamics
+                              )
+
+    uni.evolve()'''
 
     params = utils.load_params(input)
 
@@ -136,6 +173,7 @@ def test_pressure_adjustment(
     nstpcouple          = pressure_coupling["nstpcouple"]
     K_A                 = pressure_coupling["K_A"]
     ref_A               = pressure_coupling["ref_A"]
+    langevin_dynamics   = params["langevin_dynamics"]
     output              = params["output"]
 
     assert nsteps % nstchk == 0, 'nsteps must be divisible by nstchk'
@@ -347,6 +385,7 @@ def test_pressure_adjustment(
         axs[1,0].legend()
         axs[1,1].legend()
         plt.tight_layout()
+        fig.savefig(f'{output}_pressure_adjustment_correlation.png', dpi=300)
         plt.show()
 
         print('tau_c = ', tau_c, 'ns')

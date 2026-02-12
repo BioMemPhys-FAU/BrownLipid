@@ -23,7 +23,7 @@ def load_params(json_file):
     if any(k == 'parameters' for k in input_params.keys()): input_params = input_params["parameters"]
 
     #Check for unknown values in parameter file
-    unknown = set(input_params) - {'size_x', 'size_y', 'N', 'pbc_dim', 'nsteps', 'dt', 'nstxout', 'nstchk', 'base_d_coeff', 'hard_boundaries', 'softwall', 'bounce_scale', 'checkpoint_structure', 'viscosity', 'random_domains', 'diffusion_domains', 'external_forces', 'temp', 'pressure_coupling', 'output'}
+    unknown = set(input_params) - {'size_x', 'size_y', 'N', 'pbc_dim', 'nsteps', 'dt', 'nstxout', 'nstchk', 'base_d_coeff', 'hard_boundaries', 'softwall', 'bounce_scale', 'checkpoint_structure', 'viscosity', 'random_domains', 'diffusion_domains', 'external_forces', 'temp', 'langevin_dynamics', 'pressure_coupling', 'output'}
     if unknown: raise KeyError(f"Unknown parameter(s): {unknown}")
 
     #Define default values
@@ -46,7 +46,8 @@ def load_params(json_file):
         'diffusion_domains': 0.0,
         'external_forces': {},
         'temp': 298,
-        'pressure_coupling': {},
+        'langevin_dynamics': False,
+        'pressure_coupling': False,
         'output': 'output'
     }
 
@@ -150,6 +151,31 @@ def distance_matrix_NxN(pos, N, pbc_dim, offsets):
         vec_mat[ i, (i+1):, :] = ( rij_offset / rij_ ).reshape(-1, 1) * rij
 
     return dist_mat, vec_mat
+
+def generate_initial_momenta(N, mass, temp):
+
+    """
+    Select initial momenta for Langevin dynamics from Maxwell-Boltzmann distribution.
+
+
+    """
+
+    RT = 8.31446 * temp # J / mol
+
+    #Standard deviation
+    sigma = np.sqrt(RT * 1e3 / mass) # m/s
+
+    #Sampling velocities
+    v = np.random.normal(loc=0.0, scale=sigma, size=(N, 2))
+
+    #Remove center of mass motion
+    v -= np.mean(v, axis=0)
+
+    #Calculate momenta
+    momentum = mass * v * 1e-3 # kg * nm / (ns * mol)
+
+    return momentum
+
 
 @jit(nopython=True)
 def apply_pbc_vector(vec, pbc_dim) -> np.ndarray:
