@@ -23,7 +23,10 @@ def load_params(json_file):
     if any(k == 'parameters' for k in input_params.keys()): input_params = input_params["parameters"]
 
     #Check for unknown values in parameter file
-    unknown = set(input_params) - {'size_x', 'size_y', 'N', 'pbc_dim', 'nsteps', 'dt', 'nstxout', 'nstchk', 'base_d_coeff', 'hard_boundaries', 'softwall', 'bounce_scale', 'checkpoint_structure', 'viscosity', 'random_domains', 'diffusion_domains', 'external_forces', 'temp', 'langevin_dynamics', 'pressure_coupling', 'output'}
+    unknown = set(input_params) - {'size_x', 'size_y', 'N', 'comp_name', 'pbc_dim', 'nsteps', 'dt', 'nstxout', 'nstchk',
+                                   'base_d_coeff', 'hard_boundaries', 'softwall', 'bounce_scale', 'checkpoint_structure',
+                                   'viscosity', 'random_domains', 'diffusion_domains', 'external_forces', 'temp',
+                                   'langevin_dynamics', 'pressure_coupling', 'output'}
     if unknown: raise KeyError(f"Unknown parameter(s): {unknown}")
 
     #Define default values
@@ -31,6 +34,7 @@ def load_params(json_file):
         'size_x': 10.0,
         'size_y': 10.0,
         'N': 1000,
+        'comp_name': 'lipid',
         'pbc_dim': 'xy',
         'nsteps': 5000,
         'dt': 1.0,
@@ -60,6 +64,19 @@ def load_params(json_file):
     params['nstchk'] = int(params['nstchk'])
 
     return params
+
+def convert_for_json(obj):
+    """JSON serializer for objects not serializable by default json code"""
+
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()                 #array to list
+    if isinstance(obj, np.generic):
+        return obj.item()                   #np.float to float
+    if isinstance(obj, dict):
+        return {k: convert_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [convert_for_json(i) for i in obj]
+    return obj
 
 
 def heaviside(x, threshold):
@@ -110,18 +127,15 @@ def distance_matrix_NxN(pos, N, pbc_dim, offsets):
     Returns
     -------
 
-    vec_mat  := numpy.ndarray
-        Squared distances between particles.
     dist_mat := numpy.ndarray
+         Distances between particles.
+    vec_mat  := numpy.ndarray
         Distance vectors between particles.
 
 
     """
 
     #Init storage vectors
-    #dist_mat = np.zeros((N, N)   , dtype = np.float32) * np.nan
-    #vec_mat  = np.zeros((N, N, 2), dtype = np.float32) * np.nan
-    
     dist_mat = np.ones((N, N)   , dtype = np.float32) * np.inf
     vec_mat  = np.ones((N, N, 2), dtype = np.float32) * np.inf
 
@@ -142,37 +156,92 @@ def distance_matrix_NxN(pos, N, pbc_dim, offsets):
             rij[:, k] = np.where(rij[:, k] <= - size / 2, rij[:, k] + size, rij[:, k])
 
 
-        #For the force calculation later only the squared distance is required, therefore the square root operation is omitted.
+        #Calculate distances
         rij_       = np.sqrt( np.sum(rij**2,axis=1) )
         rij_offset = rij_ - offsets[i, (i+1):]
 
-        #Store the squared distances and distance vectors in the arrays
+        #Store the distances and distance vectors in the arrays
         dist_mat[i, (i+1):]    = rij_offset
         vec_mat[ i, (i+1):, :] = ( rij_offset / rij_ ).reshape(-1, 1) * rij
 
     return dist_mat, vec_mat
 
-def generate_initial_momenta(N, mass, temp):
+@jit(nopython=True)
+def distance_matrix_NxM(ref_pos, conf_pos, pbc_dim):
 
     """
-    Select initial momenta for Langevin dynamics from Maxwell-Boltzmann distribution.
+    Calculate distance matrix between all possible pairs of particles in ref_pos and pos array.
+    This function is computational expensive, and for the sake of performance it should be called as rarley as possible.
+    However, increasing the call frequency could improve the accuracy of the simulation.
 
+    Improvements taken from:
+    https://github.com/Allen-Tildesley/examples/blob/master/python_examples/md_lj_module.py
+
+    Parameters
+    ----------
+
+    ref_pos     := numpy.ndarray
+        Reference positional vector. Expects two-dimensional coordinates -> (N, 2)
+    conf_pos     := numpy.ndarray
+        Configuration positional vector. Expects two-dimensional coordinates -> (M, 2)
+    N       := int
+        Number of reference particles in the system. E.g. Brownian particles
+    M       := int
+        Number of configuration particles in the system. E.g. Domains
+    pbc_dim := tuple
+        First list contains index of dimensions along which PBC is applied. Second list contains length of box vector along which PBC is applied.
+
+    Returns
+    -------
+
+    rij_    := numpy.ndarray
+        Distances between particles.
+    rij     := numpy.ndarray
+        Distance vectors between particles.
+
+
+    """
+
+    #rij is the vector that points from (i+1) to i, or otherwise that points from j to i.
+    rij    = ref_pos[:, np.newaxis, :] - conf_pos[np.newaxis, :, :]
+
+    #Apply periodic boundary conditions
+    for k, size in zip(pbc_dim[0], pbc_dim[1]):
+
+        k = int(k)
+        assert k in [0, 1], 'PBC dimension must be either 0 or 1'
+
+        rij[:, :, k] = np.where(rij[:, :, k] >    size / 2, rij[:, :, k] - size, rij[:, :, k])
+        rij[:, :, k] = np.where(rij[:, :, k] <= - size / 2, rij[:, :, k] + size, rij[:, :, k])
+
+
+    #Calculate distances
+    rij_ = np.sqrt( np.sum(rij**2,axis=2) )
+
+    return rij_, rij
+
+def generate_initial_momenta(N, mass_per_lip, temp):
+
+    """
+    Sample initial momenta from Maxwell-Boltzmann distribution.
 
     """
 
     RT = 8.31446 * temp # J / mol
 
     #Standard deviation
-    sigma = np.sqrt(RT * 1e3 / mass) # m/s
+    sigma = np.sqrt(RT * 1e3 / mass_per_lip) # m/s
 
     #Sampling velocities
-    v = np.random.normal(loc=0.0, scale=sigma, size=(N, 2))
+    v = np.random.normal(loc=0, scale=sigma, size=(N, 2))
 
     #Remove center of mass motion
-    v -= np.mean(v, axis=0)
+    v_drift = np.sum(v * mass_per_lip, axis = 0) / np.sum(mass_per_lip)
+
+    v -= v_drift
 
     #Calculate momenta
-    momentum = mass * v * 1e-3 # kg * nm / (ns * mol)
+    momentum = mass_per_lip * v * 1e-3 # kg * nm / (ns * mol)
 
     return momentum
 
@@ -561,7 +630,7 @@ def vector_field(pos, displacement, nx, ny, grid, idx_grid,  pbc_dim):
     return store_vector / divid_vector
 
 #@jit(nopython=True)
-def self_rdf(pos, pbc_dim, r_max, binwidth, area, exp_density):
+def self_rdf(pos, pbc_dim, r_max, binwidth, area):
 
     nFrames, N, _ = pos.shape
 
@@ -579,6 +648,7 @@ def self_rdf(pos, pbc_dim, r_max, binwidth, area, exp_density):
 
     L = np.sqrt(area)
     pbc_dim_analysis = np.array([pbc_dim[0], np.zeros(2)])
+    mean_area = np.mean(area)
 
     rdf = np.zeros( (nFrames, len(binmids) ) )
     cdf = np.zeros( (nFrames, len(binmids) ) )
@@ -596,13 +666,13 @@ def self_rdf(pos, pbc_dim, r_max, binwidth, area, exp_density):
 
         hist, _ = np.histogram( a = dist, bins = bins )
 
-        rdf[i]  = 2 * hist / shell_area / (N-1) / exp_density
+        rdf[i]  = 2 * hist / shell_area / (N-1) / (N / mean_area)
         cdf[i]  = np.cumsum( 2 * hist / (N-1) )
-        pdf[i]  = hist #/ (np.sum(hist) * binwidth)
+        pdf[i]  = hist
 
     return binmids, rdf, cdf, pdf
 
-def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, area, domain_coords, radii, rmin):
+def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, area, domain_coords, radii, rmin):
 
     nFrames, N, _ = pos.shape
 
@@ -620,6 +690,7 @@ def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, area, domain_coord
 
     L = np.sqrt(area)
     pbc_dim_analysis = np.array([pbc_dim[0], np.zeros(2)])
+    mean_area = np.mean(area)
 
     rdf = np.zeros( (nFrames, len(binmids) ) )
     cdf = np.zeros( (nFrames, len(binmids) ) )
@@ -646,8 +717,51 @@ def self_bulk_rdf(pos, pbc_dim, r_max, binwidth, exp_density, area, domain_coord
 
         hist, _ = np.histogram( a = dist, bins = bins )
 
-        rdf[i]  = 2 * hist / shell_area / (N_eff-1) / exp_density
+        rdf[i]  = 2 * hist / shell_area / (N_eff-1) / (N_eff / mean_area)
         cdf[i]  = np.cumsum( 2 * hist / (N_eff-1) )
         pdf[i] = hist / (np.sum(hist) * binwidth)
+
+    return binmids, rdf, cdf, pdf
+
+def cross_rdf(pos_1, pos_2, pbc_dim, r_max, binwidth, area):
+
+    nFrames, n1, _ = pos_1.shape
+    _,       n2, _ = pos_2.shape
+
+    print("Number of frames:", nFrames)
+    print("Total number of particles:")
+
+    #RDF calculation
+    bins          = np.linspace(0, r_max, int( np.round( r_max / binwidth + 1.0 ) ) )
+    _, edges      = np.histogram( a = [], bins = bins )
+
+    edges         = edges.astype(np.float32)
+
+    shell_area    = np.pi * (edges[1:]**2 - edges[:-1]**2)
+    binmids       = (edges[1:] + edges[:-1]) / 2
+
+    L = np.sqrt(area)
+    pbc_dim_analysis = np.array([pbc_dim[0], np.zeros(2)])
+    mean_area = np.mean(area)
+
+    rdf = np.zeros( (nFrames, len(binmids) ) )
+    cdf = np.zeros( (nFrames, len(binmids) ) )
+    pdf = np.zeros( (nFrames, len(binmids) ) )
+
+    for i in tqdm( range(nFrames) ):
+
+        pbc_dim_analysis[1,:] = L[i]
+
+        dist, vec = distance_matrix_NxM(ref_pos = pos_1[i], conf_pos = pos_2[i], pbc_dim = pbc_dim_analysis)
+
+        dist = dist.flatten()
+
+        dist = dist[np.isfinite(dist)]
+
+        hist, _ = np.histogram( a = dist, bins = bins )
+
+        rdf[i]  = hist / shell_area / n1 / (n2 / mean_area)
+        cdf[i]  = np.cumsum(hist / n1 )
+        pdf[i]  = hist
 
     return binmids, rdf, cdf, pdf

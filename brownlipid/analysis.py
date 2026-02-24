@@ -93,8 +93,6 @@ class Analysis(base):
         self.w_storage = self.w_storage[::skip, :, :]
         self.time_array = self.time_array[::skip]
 
-        print(f"Check {chk_number}: {self.time_array[-1]}")
-
         #Validation
         assert self.w_storage.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.w_storage.shape[0]}"
 
@@ -104,7 +102,7 @@ class Analysis(base):
         return 1
 
 
-    def load_data_area(self, skip = 1):
+    def load_data_Area(self, skip = 1):
 
         try:
             if self.Area.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
@@ -134,7 +132,7 @@ class Analysis(base):
         return 1
 
 
-    def load_data_pressure(self, skip = 1):
+    def load_data_Pressure(self, skip = 1):
 
         try:
             if self.Pressure.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
@@ -163,7 +161,7 @@ class Analysis(base):
 
         return 1
 
-    def load_data_velocity(self, block=None, skip=1):
+    def load_data_Velocity(self, block=None, skip=1):
 
         try:
             if self.Velocity.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
@@ -206,6 +204,93 @@ class Analysis(base):
                            atol=1E-3), "Time step distance is not as expected!"
         assert np.allclose(self.dt * self.nstxout * skip, np.diff(self.time_array), rtol=0,
                            atol=1E-3), "Time step distance is not as expected!"
+
+        return 1
+
+    def load_data_potEnergy(self, skip = 1):
+
+        try:
+            if self.potEnergy.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
+        except: pass
+
+        self.potEnergy = np.zeros((0), dtype = np.float32)
+
+        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
+
+            chk_number = str(chk_number)
+
+            if chk_number == "1":
+
+                self.potEnergy = np.append(self.potEnergy, np.load(self.output + f'_potE.{chk_number.zfill(5)}.npy'))
+
+            else:
+
+                data = np.load(self.output + f'_potE.{chk_number.zfill(5)}.npy')
+
+                self.potEnergy = np.append(self.potEnergy, data)
+
+        self.potEnergy = self.potEnergy[::skip]
+
+        #Validation
+        assert self.potEnergy.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.potEnergy.shape[0]}"
+
+        return 1
+
+    def load_data_Virial(self, skip = 1):
+
+        try:
+            if self.Virial.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
+        except: pass
+
+        self.Virial = np.zeros((0), dtype = np.float32)
+
+        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
+
+            chk_number = str(chk_number)
+
+            if chk_number == "1":
+
+                self.Virial = np.append(self.Virial, np.load(self.output + f'_Virial.{chk_number.zfill(5)}.npy'))
+
+            else:
+
+                data = np.load(self.output + f'_Virial.{chk_number.zfill(5)}.npy')
+
+                self.Virial = np.append(self.Virial, data)
+
+        self.Virial = self.Virial[::skip]
+
+        #Validation
+        assert self.Virial.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.Virial.shape[0]}"
+
+        return 1
+
+    def load_data_ScalFac(self, skip = 1):
+
+        try:
+            if self.ScalFac.shape[0] == self.nsteps // self.nstxout // skip + 1: return 0
+        except: pass
+
+        self.ScalFac = np.zeros((0), dtype = np.float32)
+
+        for chk_number in range(1, self.nsteps // self.nstchk + 1 ):
+
+            chk_number = str(chk_number)
+
+            if chk_number == "1":
+
+                self.ScalFac = np.append(self.ScalFac, np.load(self.output + f'_ScalFac.{chk_number.zfill(5)}.npy'))
+
+            else:
+
+                data = np.load(self.output + f'_ScalFac.{chk_number.zfill(5)}.npy')
+
+                self.ScalFac = np.append(self.ScalFac, data)
+
+        self.ScalFac = self.ScalFac[::skip]
+
+        #Validation
+        assert self.ScalFac.shape[0] == ( self.nsteps // self.nstxout // skip + 1), f"Number of frames is not correct! Expected: {self.nsteps // self.nstxout // skip + 1} Got: {self.ScalFac.shape[0]}"
 
         return 1
 
@@ -285,7 +370,7 @@ class Analysis(base):
 
         return tau, msd, sd_per_particle
 
-    def get_rdf(self, exp_density, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
+    def get_rdf(self, name_1, name_2, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
 
         """
         Radial Distribution Function
@@ -294,8 +379,10 @@ class Analysis(base):
 
         Parameters
         ----------
-        exp_density : float
-            Density of the system (1/nm^2)
+        name_1 : string
+            Name of the first component
+        name_2 : string
+            Name of the second component
         begin := float
             Start time for analysis (ns)
         stop := float
@@ -322,6 +409,9 @@ class Analysis(base):
 
         if block == None: block = np.arange( self.N )
 
+        assert name_1 in self.comp_name, f'Error. Component {name_1} not found!'
+        assert name_2 in self.comp_name, f'Error. Component {name_2} not found!'
+
         #Convert time to frames
         skip  = int( np.round( skip  / self.dt / self.nstxout) )
         begin = int( np.round( begin / self.dt / self.nstxout ) ) // skip
@@ -341,13 +431,24 @@ class Analysis(base):
 
         w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
 
-        self.load_data_area(skip = skip)
+        self.load_data_Area(skip = skip)
         area_analysis = np.copy( self.Area[begin:stop] )
 
         assert nsteps_analysis == w_storage_analysis.shape[0], 'Not correct number of frames'
 
-        if bulk: binmids, rdf, cdf, pdf = utils.self_bulk_rdf(exp_density = exp_density, pos = w_storage_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, area = area_analysis, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
-        else:    binmids, rdf, cdf, pdf = utils.self_rdf(exp_density = exp_density, pos = w_storage_analysis, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
+        if name_1 == name_2:
+
+            pos = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_1)] , :]
+
+            if bulk: binmids, rdf, cdf, pdf = utils.self_bulk_rdf(pos = pos, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, area = area_analysis, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
+            else:    binmids, rdf, cdf, pdf = utils.self_rdf(pos = pos, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
+
+        else:
+            pos_1 = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_1)] , :]
+            pos_2 = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_2)] , :]
+            #pos = np.concatenate((pos_1, pos_2), axis = 1)
+
+            binmids, rdf, cdf, pdf = utils.cross_rdf(pos_1 = pos_1, pos_2 = pos_2, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
 
         return binmids, rdf.mean(0), cdf.mean(0), pdf.mean(0)
 
@@ -652,7 +753,7 @@ class Analysis(base):
         #plt.ylabel('Number of Trajectories')
         #plt.xlabel(r'MSD / $\mu$m$^2$')
 
-    def export_trajectory(self, atomname = 'B1', resname = 'LIP', output = None, pml_file = False, begin=0, stop=None, skip=1, block = None):
+    def export_trajectory(self, atomname = 'B1', output = None, pml_file = False, begin=0, stop=None, skip=None, block = None):
 
         """
         Export trajectory to gromacs format
@@ -663,8 +764,6 @@ class Analysis(base):
 
         atomname := str
             Atom name to be written to the output .gro file
-        resname := str
-            Residue name to be written to the output .gro file
         output := str
             Name for the output .gro and .xtc files which gets appended to the standard output (self.output)
         pml_file := bool or str
@@ -719,7 +818,7 @@ class Analysis(base):
         traj = np.zeros((nsteps_analysis, N_analysis, 3), dtype = np.float32)
         traj[:,:,0:2] = w_storage_analysis * 10 #MDA uses Angström
 
-        self.load_data_area(skip = skip)
+        self.load_data_Area(skip = skip)
 
         area_analysis = np.copy( self.Area[begin:stop] )
         L = np.sqrt(area_analysis) * 10 #MDA uses Angström
@@ -731,7 +830,7 @@ class Analysis(base):
         u = mda.Universe.empty(n_atoms=N_analysis, n_residues=N_analysis, atom_resindex=block, trajectory=True)
 
         #Add topology
-        u.add_TopologyAttr('resname', [resname] * N_analysis)
+        u.add_TopologyAttr('resname', self.comp_name_per_lip)
         u.add_TopologyAttr('name', [atomname] * N_analysis)
 
         #Load trajectory
@@ -755,7 +854,7 @@ class Analysis(base):
         if pml_file:
 
             #Use sigma as distance => sigma/2 as radius of bead
-            vdw_r = self.lj_sig / 2 * 10 #MDA uses Angström
+            vdw_r = np.diag(self.lj_sig) / 2 * 10 #MDA uses Angström
 
             pml_content = f"""
             
@@ -763,10 +862,11 @@ class Analysis(base):
             load {output}.xtc
             
             show cell
-            
-            alter all, vdw={vdw_r:.4g}
 
             """
+
+            for i, n in enumerate(self.comp_name):
+                pml_content += f'alter resn {n}, vdw={vdw_r[i]:.4g}\n'
 
             if type(pml_file) == type(True): output = self.output + '_trajectory_script'
             else: output = self.output + pml_file
@@ -829,7 +929,7 @@ class Analysis(base):
         self.load_data_wrap(skip = skip, block = block)
         w_storage_analysis = np.copy(self.w_storage[begin:stop, :, :])
 
-        self.load_data_area(skip = skip)
+        self.load_data_Area(skip = skip)
         area_analysis = np.copy( self.Area[begin:stop] )
         L = np.sqrt(area_analysis)
 

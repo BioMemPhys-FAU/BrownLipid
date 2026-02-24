@@ -100,30 +100,33 @@ def test_scaling_calc():
 #---------------------------------------------------------------------------------------------------------------------
 #Tests for pressure coupling
 
-def test_pressure_adjustment(
+def test_pressure_adjustment_run(
         #input = '/Volumes/lacie_1/elias/cg_mem_run/analysis/parameter_files/DPPC_whole_lipid_params.json',
-        input = '/Users/eliasnickel/Documents/langevin_run/langevin_run_info.json',
+        input = '/Users/eliasnickel/DPPC_DIPC_CHOL_mem/run/multi_component_run_info.json',
 
         #DOPC
-        L = 8.212,
-        N = 100,
-        nsteps = int(1e7),
+        L = np.sqrt(183.226)*1.3,
+        N = [302, 202, 216],
+        comp_name = ['DPPC', 'DIPC', 'CHOL'],
+        nsteps = int(2e5),
         dt = 5e-5,
-        temp = 310,
+        temp = 295,
         nstxout = 1,
         output = 'pressure_test/output',
 
-        base_d_coeff = 0.0562331773557475,
-        external_forces={'epsilon': 0.080, 'sigma': 0.60921, 'r_vdw': 1.2, 'r_list':2.0, 'nstlist':2, 'epsilon_domains':0.88, 'sigma_domains':0.7706},
+        base_d_coeff = np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/Dcoeffs.npy') * 1e5,
+        external_forces={'epsilon': np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/eps_matrix.npy'),
+                         'sigma': np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/sigma_matrix.npy'),
+                         'r_vdw': 1.2, 'r_list':2.0, 'nstlist':2},
         ref_p = 0,
         compressibility = 5.6e-05,
         tau_p = 0.01,
-        K_A = 240.705,
-        ref_A = 66.1103,
+        K_A = 351.644,
+        ref_A = 183.327,
         thresh_p = 1e-21,
         nstpcouple = 1,
 
-        langevin_dynamics={'mass': 828.0},
+        langevin_dynamics={'mass': np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/masses.npy')},
 
         fit_start = 0.37,       #fraction of total time
         test_tol = 1.8,
@@ -134,12 +137,13 @@ def test_pressure_adjustment(
         t_equ = 20             #for correlation
         ):
 
-    '''nstchk = nsteps
+    nstchk = nsteps
 
     uni = brownlipid.Universe(  input_file=False,
                                 size_x=L,
                                 size_y=L,
                                 N=N,
+                                comp_name=comp_name,
                                 nsteps=nsteps,
                                 dt=dt,
                                 temp=temp,
@@ -152,29 +156,7 @@ def test_pressure_adjustment(
                                 langevin_dynamics=langevin_dynamics
                               )
 
-    uni.evolve()'''
-
-    params = utils.load_params(input)
-
-    L                   = params["size_x"]
-    N                   = params["N"]
-    nsteps              = params["nsteps"]
-    dt                  = params["dt"]
-    nstxout             = params["nstxout"]
-    nstchk              = params["nstchk"]
-    base_d_coeff        = params["base_d_coeff"]
-    external_forces     = params["external_forces"]
-    temp                = params["temp"]
-    pressure_coupling   = params["pressure_coupling"]
-    ref_p               = pressure_coupling["ref_p"]
-    compressibility     = pressure_coupling["compressibility"]
-    tau_p               = pressure_coupling["tau_p"]
-    thresh_p            = pressure_coupling["thresh_p"]
-    nstpcouple          = pressure_coupling["nstpcouple"]
-    K_A                 = pressure_coupling["K_A"]
-    ref_A               = pressure_coupling["ref_A"]
-    langevin_dynamics   = params["langevin_dynamics"]
-    output              = params["output"]
+    #uni.evolve()
 
     assert nsteps % nstchk == 0, 'nsteps must be divisible by nstchk'
 
@@ -187,7 +169,6 @@ def test_pressure_adjustment(
     L_expected = np.sqrt(Area_expected)
     virial_expected = 2*(ref_p*Area_expected * 6.022*0.1 - N * 1.38 * temp * 6.022*1e-3 - 12 * N**2 / Area_expected * 3.14159 * external_forces['epsilon'] * external_forces['sigma']**2 * (0.2 * (external_forces['sigma']/external_forces['r_vdw'])**10 - 0.25 * (external_forces['sigma']/external_forces['r_vdw'])**4))
     print(f'Expected area: {Area_expected:.3g} nm^2\nExpected box length: {L_expected:.3g} nm\nExpected virial: {virial_expected:.3g} kJ/mol')'''
-
 
     Pressure = np.load(f'{output}_Pressure.{1:05d}.npy')[1:]
     Area     = np.load(f'{output}_Area.{1:05d}.npy')[1:]
@@ -213,9 +194,13 @@ def test_pressure_adjustment(
     print(f'Pressure RMSD after fit threshold: {Pressure_rmsd_fit:.3f} mN/m')
 
     #Plotting
-    params = (f'L = {L:.3g}, N = {N}, ref_p = {ref_p}, eps = {external_forces['epsilon']}, sig = {external_forces['sigma']}, r_vdw = {external_forces['r_vdw']}, D = {base_d_coeff:.3g}\n'
-              f'compressibility = {compressibility:.3g}, tau_p = {tau_p:.3g}, K_A = {K_A:.3g}, ref_A = {ref_A:.3g}, thresh_p = {thresh_p}, nstpcouple =  {nstpcouple:.3g}, dt = {dt:.3g}, nstxout = {nstxout:.3g}\n')
+    #params = (f'L = {L:.3g}, N = {N}, ref_p = {ref_p}, eps = {external_forces['epsilon']}, sig = {external_forces['sigma']}, r_vdw = {external_forces['r_vdw']}, D = {base_d_coeff:.3g}\n'
+    #          f'compressibility = {compressibility:.3g}, tau_p = {tau_p:.3g}, K_A = {K_A:.3g}, ref_A = {ref_A:.3g}, thresh_p = {thresh_p}, nstpcouple =  {nstpcouple:.3g}, dt = {dt:.3g}, nstxout = {nstxout:.3g}\n')
               #f'Expected area: {Area_expected:.3g} nm^2, expected box length: {L_expected:.3g} nm, expected virial: {virial_expected:.3g} kJ/mol, actual virial (mean): {actual_virial:.3f} kJ/mol')
+
+    params = (f'L = {L:.3g}, N = {np.sum(N)}, ref_p = {ref_p}, r_vdw = {external_forces['r_vdw']},\n'
+              f'compressibility = {compressibility:.3g}, tau_p = {tau_p:.3g}, K_A = {K_A:.3g}, ref_A = {ref_A:.3g}, thresh_p = {thresh_p}, nstpcouple =  {nstpcouple:.3g}, dt = {dt:.3g}, nstxout = {nstxout:.3g}\n')
+
 
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(13, 8.5))
 
@@ -393,15 +378,117 @@ def test_pressure_adjustment(
     #np.testing.assert_allclose(b_p, ref_p, atol=test_tol)
     # return actual_virial
 
+def test_pressure_adjustment_file(
+        input_file='/Users/eliasnickel/Documents/langevin_run/langevin_run_info.json',
+        fit_start = 0.37,       #fraction of total time
+        xlim = [],              #[xl,xr] with Fraction of total time or False
+        ylim = True,            #y-scaling in the xlim interval
+        virialPlot = True,      #either scal_fac or virial plot
+        ):
 
-#---------------------------------------------------------------------------------------------------------------------
-def test_hydrophobic_cohesion_const():
-    actual_virials =  []
-    for _ in range(10):
-        actual_virials.append(test_pressure_adjustment())
-    print(actual_virials)
-    print(np.mean(actual_virials)) #5042.999
-    print('hydrophobic_cohesion_const:', -515.85 - np.mean(actual_virials)) #-5558.849
+    A = brownlipid.Analysis(input_file=input_file)
+
+    A.load_data_Pressure()
+    A.load_data_Area()
+    A.load_data_potEnergy()
+    A.load_data_Virial()
+    A.load_data_ScalFac()
+
+    L = A.size_x
+
+    #Linear Fitting
+    x = np.linspace(0, A.nsteps * A.dt, int(A.nsteps / A.nstxout) + 1)
+
+    fit_index = int((fit_start * len(x)))
+    x_fit = x[fit_index:]
+
+    m_p, b_p = np.polyfit(x_fit, A.Pressure[fit_index:], 1)
+    m_A, b_A = np.polyfit(x_fit, A.Area[fit_index:], 1)
+
+    #RMSD
+    Pressure_rmsd = np.sqrt(np.mean((A.Pressure - A.ref_p) ** 2))
+    Pressure_rmsd_fit = np.sqrt(np.mean((A.Pressure[fit_index] - A.ref_p) ** 2))
+    print(f'Pressure RMSD: {Pressure_rmsd:.3f} mN/m')
+    print(f'Pressure RMSD after fit threshold: {Pressure_rmsd_fit:.3f} mN/m')
+
+    #Plotting
+    params = (f'L = {L:.3g}, N = {A.N}, ref_p = {A.ref_p}, r_vdw = {A.external_forces['r_vdw']}, nstxout = {A.nstxout:.3g}\n'
+              f'compressibility = {A.compressibility:.3g}, tau_p = {A.tau_p:.3g}, K_A = {A.K_A:.3g}, ref_A = {A.ref_A:.3g}, '
+              f'thresh_p = {A.thresh_p}, nstpcouple =  {A.nstpcouple:.3g}, dt = {A.dt:.3g}')
+
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(13, 8.5))
+
+    #Pressure plot
+    axs[0,0].plot(x_fit, A.Pressure[fit_index:], label='Pressure',alpha=0.9 ,c='C0')       #after thresh
+    axs[0,0].plot(x[:fit_index+1], A.Pressure[:fit_index+1], alpha=0.5, c='C0')  #until thresh
+    axs[0,0].scatter(x[:fit_index],A.Pressure[:fit_index],c='b',s=10)                 #until thresh
+    axs[0,0].plot(x, np.ones(len(A.Pressure))*A.ref_p, label=f'ref_p (RMSD: {Pressure_rmsd:.2f})', c='g', linestyle='--', linewidth=2)
+    axs[0,0].plot(x_fit, m_p*x_fit + b_p, label=f'fit: {m_p:.2g}x + {b_p:.2f}', c='r',alpha = 0.8, linestyle='-.', linewidth=2)
+    axs[0,0].set_xlabel('Time in ns')
+    axs[0,0].set_ylabel('Pressure in mN/m')
+    axs[0,0].grid(True)
+    axs[0,0].legend()
+
+    #Area plot
+    axs[0,1].plot(x_fit, A.Area[fit_index:], label='Area', c='C0') #after thresh
+    axs[0,1].plot(x[:fit_index+1], A.Area[:fit_index+1], alpha=0.5, c='C0') #until thresh
+    axs[0,1].scatter(x[:fit_index],A.Area[:fit_index],c='b',s=10) #until thresh
+    axs[0,1].plot(x, np.ones(len(A.Area))*A.ref_A, label=f'ref_A', c='g', linestyle='--', linewidth=2)
+    axs[0,1].plot(x_fit, m_A*x_fit + b_A, label=f'fit: {m_A:.2g}x + {b_A:.2f}', c='r', linestyle='-.', linewidth=2)
+    axs[0,1].scatter(-0.001,L**2,c='purple',s=40,marker='x', alpha=0.7)
+    axs[0,1].set_xlabel('Time in ns')
+    axs[0,1].set_ylabel('Area in nm^2')
+    axs[0,1].grid(True)
+    axs[0,1].legend()
+
+    #Energy plot
+    axs[1,0].plot(x, A.potEnergy, label='pot. Energy')
+    axs[1,0].set_xlabel('Time in ns')
+    axs[1,0].set_ylabel('Energy in kJ/mol')
+    axs[1,0].grid(True)
+    axs[1,0].legend()
+
+    if virialPlot:
+        #Virial plot
+        axs[1,1].plot(x, A.Virial, label='Virial (not LR-corrected)')
+        axs[1,1].set_xlabel('Time in ns')
+        axs[1,1].set_ylabel('Virial in kJ/mol')
+        axs[1,1].grid(True)
+        axs[1,1].legend()
+
+    else:
+        #Scaling Factor plot
+        axs[1, 1].plot(x_fit, A.ScalFac[fit_index:], label='Scaling Factor', alpha=0.9, c='C0')  # after thresh
+        axs[1, 1].plot(x[:fit_index + 1], A.ScalFac[:fit_index + 1], alpha=0.5, c='C0')  # until thresh
+        axs[1, 1].scatter(x[:fit_index], A.ScalFac[:fit_index], c='b', s=10) # until thresh
+        axs[1, 1].set_xlabel('Time in ns')
+        axs[1, 1].set_ylabel('Scaling Factor')
+        axs[1, 1].grid(True)
+        axs[1, 1].legend()
+
+    #set plot limits
+    if xlim:
+        xlcut = A.nsteps * A.dt * xlim[0]
+        xrcut = A.nsteps * A.dt * xlim[1]
+        axs[0, 0].set_xlim(xlcut, xrcut)
+        axs[0, 1].set_xlim(xlcut, xrcut)
+        axs[1, 0].set_xlim(xlcut, xrcut)
+        axs[1, 1].set_xlim(xlcut, xrcut)
+        if ylim:
+            xli = int(xlcut / A.dt / A.nstxout)
+            xri = int(xrcut / A.dt / A.nstxout)
+            axs[0, 0].set_ylim(min(A.Pressure[xli:xri]), max(A.Pressure[xli:xri]))
+            axs[0, 1].set_ylim(min(A.Area[xli:xri]), max(A.Area[xli:xri]))
+            axs[1, 0].set_ylim(min(A.potEnergy[xli:xri]), max(A.potEnergy[xli:xri]))
+            if virialPlot:
+                axs[1, 1].set_ylim(min(A.Virial[xli:xri]), max(A.Virial[xli:xri]))
+            else:
+                axs[1, 1].set_ylim(min(A.ScalFac[xli:xri]), max(A.ScalFac[xli:xri]))
+
+    plt.suptitle(f'Parameters: {params}', fontsize=13)
+    plt.tight_layout()
+    fig.savefig(f'{A.output}_pressure_adjustment.png', dpi=300)
+    plt.show()
 
 #---------------------------------------------------------------------------------------------------------------------
 

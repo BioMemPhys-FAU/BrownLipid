@@ -9,7 +9,7 @@ Pressure as tension (mN/m)
 
 dP/dt = - 1/(isothermal_compressibility * A) * dA/dt
 
-caling_factor = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1/2)
+scaling_factor = (1 + (compressibility * dt * (p - ref_p) / tau_p)) ** (1/2)
 
 x(t + dt) = scaling_factor * x(t)
 size(t + dt) =  scaling_factor * size(t)

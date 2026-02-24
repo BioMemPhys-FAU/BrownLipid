@@ -9,7 +9,7 @@ Functions include:
 - Calculating force magnitudes and directions.
 - Utilities for handling pairwise interactions.
 
-Author: Marius Trollmann
+Author: Marius Trollmann and Elias Nickel
 """
 
 from . import utils
@@ -80,7 +80,7 @@ def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, area, E_lrc_const,
 
     return force_per_particle, pairlist, virial, pote
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def \
         calculate_force(rij, rij_sq, N, area, E_lrc_const, lj_A12, lj_B6, masked_pairlist):
 
@@ -127,13 +127,16 @@ def \
 
     #Calculate potential energy
     pote       = (sr12 / 2 - sr6 ) / 6
+    pote       = np.sum(pote)
 
     #Calculate and apply 2D long-range correction
     E_lrc = E_lrc_const / area
     pote += E_lrc
 
-    #Calculate the virial
+    #Calculate the virial (Long range correction will only be applied on the virial if pressure coupling is enabled, therefore the virial output isn't corrected)
     virial     = (sr12 - sr6 )
+
+    virial_sum_DEBUG = np.sum(virial)
 
     #Calculate "scaling factor" for the force
     force      = virial * inv_rij_sq
