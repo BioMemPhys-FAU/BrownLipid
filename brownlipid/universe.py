@@ -108,13 +108,15 @@ class Universe(base):
                                                                                           conf_pos=self.w_universe,
                                                                                           pbc_dim=self.pbc_dim,
                                                                                           area=self.area,
+                                                                                          pote_shift=self.pote_shift_matrix,
                                                                                           E_lrc_const=self.E_lrc_const,
                                                                                           buffer_radius=self.lj_buffer,
                                                                                           vdw_cutoff=self.lj_cutoff,
                                                                                           pairlist=self.pp_pairlist,
                                                                                           A12=self.lj_A12,
                                                                                           B6=self.lj_B6,
-                                                                                          offsets=self.offsets)
+                                                                                          offsets=self.offsets,
+                                                                                          force_pp_zeros=self.force_pp_zeros)
 
         #---------------------------------------------------------------------------------------------------------------------
         #Main Iteration
@@ -145,8 +147,8 @@ class Universe(base):
             #Store particle positions
 
             #Unwrapping with TOR scheme
-            for j, size in enumerate([self.size_x, self.size_y]):
-                self.u_universe[:, j] = self.u_universe[:, j] + (self.w_universe[:, j] - self.w_universe_prev[:, j]) - np.floor( (self.w_universe[:, j] - self.w_universe_prev[:, j]) / size + 0.5 ) * size
+            delta_w = self.w_universe - self.w_universe_prev
+            self.u_universe += delta_w - np.floor(delta_w / self.pbc_dim[1] + 0.5) * self.pbc_dim[1]
 
             #Write current state of the universe into storage arrays
             if not i % self.nstxout: 
@@ -328,13 +330,15 @@ class Universe(base):
                                                                                      conf_pos=self.w_universe,
                                                                                      pbc_dim=self.pbc_dim,
                                                                                      area=self.area,
+                                                                                     pote_shift=self.pote_shift_matrix,
                                                                                      E_lrc_const=self.E_lrc_const,
                                                                                      buffer_radius=self.lj_buffer,
                                                                                      vdw_cutoff=self.lj_cutoff,
                                                                                      pairlist=self.pp_pairlist,
                                                                                      A12=self.lj_A12,
                                                                                      B6=self.lj_B6,
-                                                                                     offsets=self.offsets)
+                                                                                     offsets=self.offsets,
+                                                                                     force_pp_zeros=self.force_pp_zeros)
 
             #Half-step kick (B)
             self.momentum += self.dt * self.lj_force * 1e3 / 2 # kg * nm / (ns * mol)
@@ -353,13 +357,15 @@ class Universe(base):
                                                                                      conf_pos=self.w_universe,
                                                                                      pbc_dim=self.pbc_dim,
                                                                                      area=self.area,
+                                                                                     pote_shift=self.pote_shift_matrix,
                                                                                      E_lrc_const=self.E_lrc_const,
                                                                                      buffer_radius=self.lj_buffer,
                                                                                      vdw_cutoff=self.lj_cutoff,
                                                                                      pairlist=self.pp_pairlist,
                                                                                      A12=self.lj_A12,
                                                                                      B6=self.lj_B6,
-                                                                                     offsets=self.offsets)
+                                                                                     offsets=self.offsets,
+                                                                                     force_pp_zeros=self.force_pp_zeros)
 
             F = lj_force + self.force_from_wall
 

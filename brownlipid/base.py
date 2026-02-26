@@ -119,11 +119,12 @@ class base:
             self.comp_mask                  = np.ones((1, self.N),dtype=bool)
 
             self.base_d_coeff               = np.array([self.base_d_coeff])
-            self.langevin_dynamics['mass']  = np.array([self.langevin_dynamics['mass']])
+            if any(self.langevin_dynamics): self.langevin_dynamics['mass']  = np.array([self.langevin_dynamics['mass']])
 
-            if type(self.external_forces['sigma']) in [float, int] and type(self.external_forces['epsilon']) in [float, int]:
-                self.external_forces['sigma']   = np.array([[self.external_forces['sigma']]])
-                self.external_forces['epsilon'] = np.array([[self.external_forces['epsilon']]])
+            if any(self.external_forces):
+                if type(self.external_forces['sigma']) in [float, int] and type(self.external_forces['epsilon']) in [float, int]:
+                    self.external_forces['sigma']   = np.array([[self.external_forces['sigma']]])
+                    self.external_forces['epsilon'] = np.array([[self.external_forces['epsilon']]])
 
         #Precalculation
         self.area                   = self.size_x * self.size_y
@@ -222,9 +223,17 @@ class base:
             self.lj_cutoff  = self.external_forces['r_vdw']
             self.lj_buffer  = self.external_forces['r_list']
 
+            #Calculate potential at cutoff for potential shift
+            sr6_cut = (self.sigma_matrix * self.lj_cutoff)**6
+            sr12_cut = sr6_cut**2
+            self.pote_shift_matrix = 4 * self.eps_matrix * (sr12_cut - sr6_cut)
+
             #Precalculate constant part of long-range correction for potential energy
             E_lrc_const_per_pairs = self.n_lipids_pairs * np.pi * self.lj_eps * self.lj_sig**2 * (0.4 * (self.lj_sig / self.lj_cutoff)**10 - (self.lj_sig / self.lj_cutoff)**4)
             self.E_lrc_const = np.sum(E_lrc_const_per_pairs)
+
+            #Prepare array for force_per_particle calculation
+            self.force_pp_zeros = np.zeros( (self.N, 2), dtype = np.float32 )
 
             #Init empty pairlist -> Will be changed in the first step of the simulations
             self.pp_pairlist = np.array([])

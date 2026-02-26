@@ -105,28 +105,28 @@ def test_pressure_adjustment_run(
         input = '/Users/eliasnickel/DPPC_DIPC_CHOL_mem/run/multi_component_run_info.json',
 
         #DOPC
-        L = np.sqrt(183.226)*1.3,
-        N = [302, 202, 216],
-        comp_name = ['DPPC', 'DIPC', 'CHOL'],
-        nsteps = int(2e5),
+        N = 100,
+        L = np.sqrt((66.1103/100)*100),
+        comp_name = ['DOPC'],
+        nsteps = int(1e3),
         dt = 5e-5,
-        temp = 295,
-        nstxout = 1,
+        temp = 310,
+        nstxout = 20,
         output = 'pressure_test/output',
 
-        base_d_coeff = np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/Dcoeffs.npy') * 1e5,
-        external_forces={'epsilon': np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/eps_matrix.npy'),
-                         'sigma': np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/sigma_matrix.npy'),
-                         'r_vdw': 1.2, 'r_list':2.0, 'nstlist':2},
+        base_d_coeff = 0.0562331773557475,
+        external_forces = {'epsilon': 0.080, 'sigma': 0.60921, 'r_vdw': 1.2, 'r_list': 2.0, 'nstlist': 2,
+                           'epsilon_domains': 0.88, 'sigma_domains': 0.7706},
+
         ref_p = 0,
         compressibility = 5.6e-05,
         tau_p = 0.01,
-        K_A = 351.644,
-        ref_A = 183.327,
+        K_A = 240.705,
+        ref_A = (66.1103/100)*100,
         thresh_p = 1e-21,
         nstpcouple = 1,
 
-        langevin_dynamics={'mass': np.load(f'/Users/eliasnickel/DPPC_DIPC_CHOL_mem/params/masses.npy')},
+        langevin_dynamics={'mass': 828},
 
         fit_start = 0.37,       #fraction of total time
         test_tol = 1.8,
@@ -156,7 +156,7 @@ def test_pressure_adjustment_run(
                                 langevin_dynamics=langevin_dynamics
                               )
 
-    #uni.evolve()
+    uni.evolve()
 
     assert nsteps % nstchk == 0, 'nsteps must be divisible by nstchk'
 
@@ -379,7 +379,7 @@ def test_pressure_adjustment_run(
     # return actual_virial
 
 def test_pressure_adjustment_file(
-        input_file='/Users/eliasnickel/Documents/langevin_run/langevin_run_info.json',
+        input_file='/Users/eliasnickel/DPPC_DIPC_CHOL_mem/run/noK_A_test_run_info.json',
         fit_start = 0.37,       #fraction of total time
         xlim = [],              #[xl,xr] with Fraction of total time or False
         ylim = True,            #y-scaling in the xlim interval

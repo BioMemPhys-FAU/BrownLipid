@@ -9,7 +9,7 @@ Functions include:
 - Calculating force magnitudes and directions.
 - Utilities for handling pairwise interactions.
 
-Author: Marius Trollmann and Elias Nickel
+Authors: Marius Trollmann, Elias Nickel
 """
 
 from . import utils
@@ -17,7 +17,7 @@ from . import utils
 import numpy as np
 from numba import jit
 
-def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, area, E_lrc_const, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets):
+def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, area, pote_shift, E_lrc_const, buffer_radius, vdw_cutoff, pairlist, A12, B6, offsets, force_pp_zeros):
 
     """
     Compute the Lennard-Jones forces acting on each particle in the system.
@@ -68,21 +68,21 @@ def lennard_jones(frame, nstlist, ref_pos, conf_pos, pbc_dim, area, E_lrc_const,
 
     masked_pairlist = pairlist[ effective_mask ]
     
-    force_per_particle, virial, pote = calculate_force(rij             = effective_rij,
-                                                       rij_sq          = effective_rij_sqrt**2,
-                                                       N               = ref_pos.shape[0],
-                                                       area            = area,
-                                                       E_lrc_const     = E_lrc_const,
-                                                       lj_A12          = A12[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
-                                                       lj_B6           = B6[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
-                                                       masked_pairlist = masked_pairlist)
+    force_per_particle, virial, pote = calculate_force(rij                = effective_rij,
+                                                       rij_sq             = effective_rij_sqrt**2,
+                                                       area               = area,
+                                                       pote_shift         = pote_shift[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
+                                                       E_lrc_const        = E_lrc_const,
+                                                       lj_A12             = A12[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
+                                                       lj_B6              = B6[ masked_pairlist[:, 0], masked_pairlist[:, 1] ],
+                                                       masked_pairlist    = masked_pairlist,
+                                                       force_per_particle = force_pp_zeros)
  
 
     return force_per_particle, pairlist, virial, pote
 
-#@jit(nopython=True)
-def \
-        calculate_force(rij, rij_sq, N, area, E_lrc_const, lj_A12, lj_B6, masked_pairlist):
+@jit(nopython=True)
+def calculate_force(rij, rij_sq, area, pote_shift, E_lrc_const, lj_A12, lj_B6, masked_pairlist, force_per_particle):
 
     """
     Core function for force calculation.
@@ -100,8 +100,6 @@ def \
         Directional vectors from particle j to i.
     rij_sq          := numpy.ndarray
         Squared distances between particle j and i.
-    N               := int
-        Number of particles in the system.
     area            := float
         Area of the simulation box.
     E_lrc_const     := float
@@ -112,6 +110,8 @@ def \
         Lennard Jones parameter for the attractive part. User-defined.
     masked_pairlist := numpy.ndarray
         Sub-section of a larger pairlist. Contains only pairs with a distance below the VdW cutoff.
+    force_per_particle := numpy.ndarray
+        Old array which will be overwritten with the new force values (performance).
 
     """
     
@@ -127,16 +127,17 @@ def \
 
     #Calculate potential energy
     pote       = (sr12 / 2 - sr6 ) / 6
-    pote       = np.sum(pote)
+
+    #Apply potential shift
+    pote -= pote_shift
 
     #Calculate and apply 2D long-range correction
+    pote       = np.sum(pote)
     E_lrc = E_lrc_const / area
     pote += E_lrc
 
     #Calculate the virial (Long range correction will only be applied on the virial if pressure coupling is enabled, therefore the virial output isn't corrected)
     virial     = (sr12 - sr6 )
-
-    virial_sum_DEBUG = np.sum(virial)
 
     #Calculate "scaling factor" for the force
     force      = virial * inv_rij_sq
@@ -145,7 +146,7 @@ def \
     force      = force.reshape(-1, 1) * rij
 
     #Storage factor for the force per particle
-    force_per_particle = np.zeros( (N, 2), dtype = np.float32 )
+    force_per_particle.fill(0.0)
 
     #Iterate over all particle pairs in the pairlist with a pair distance below the VdW cutoff
     k = 0

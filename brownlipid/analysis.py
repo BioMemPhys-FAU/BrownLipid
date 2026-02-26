@@ -295,7 +295,7 @@ class Analysis(base):
         return 1
 
 
-    def mean_square_displacement(self, begin = 0, stop = None, skip = None, fft = True, block = None):
+    def mean_square_displacement(self, name, begin = 0, stop = None, skip = None, fft = True, block = None):
 
         """
         Mean Square Displacement
@@ -304,7 +304,8 @@ class Analysis(base):
 
         Parameters
         ----------
-
+        name  := str
+            Name of the component for which the MSD is calculated
         begin := float
             Start time for analysis (ns)
         stop := float
@@ -340,10 +341,15 @@ class Analysis(base):
         print(f"Stop : Frame {stop}")
         print("")
 
+        name_block = np.where(self.comp_mask[self.comp_name.index(name)])[0]
+        block = np.intersect1d(block, name_block)
+
         #Load data
         self.load_data_unwrap(skip = skip, block = block)
 
         u_storage_analysis = np.copy( self.u_storage[begin:stop, :, :] )
+
+        N_analysis = u_storage_analysis.shape[1]
 
         assert nsteps_analysis == u_storage_analysis.shape[0], 'Not correct number of frames'
 
@@ -351,18 +357,16 @@ class Analysis(base):
 
         print("Start analysis...")
 
-        #if fft == True: msd, sd_per_particle = utils.MSD_fft_ax(pos = u_storage_analysis.astype(np.float64))
-
         if fft == True:
 
-            sd_per_particle = np.zeros((self.N, len(lagtimes)))
-            for n in range(self.N):
+            sd_per_particle = np.zeros((N_analysis, len(lagtimes)))
+            for n in range(N_analysis):
 
                 sd_per_particle[n] = tidynamics.msd(pos = u_storage_analysis[:, n, :].astype(np.float64))
 
             msd = np.mean(sd_per_particle, axis = 0)
 
-        else: msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = u_storage_analysis.shape[1] )
+        else: msd, sd_per_particle = utils.evaluate_lagtimes(pos = u_storage_analysis, lagtimes = lagtimes, N = N_analysis )
 
         #Convert lagtimes array to physical time
         tau = lagtimes.astype( np.float32 )
@@ -370,7 +374,7 @@ class Analysis(base):
 
         return tau, msd, sd_per_particle
 
-    def get_rdf(self, name_1, name_2, begin = 0, stop = None, skip = None, block = None, r_max = 5, binwidth = 0.5, bulk = False):
+    def get_rdf(self, name_1, name_2, begin = 0, stop = None, skip = None, r_max = 5, binwidth = 0.5, bulk = False):
 
         """
         Radial Distribution Function
@@ -389,8 +393,6 @@ class Analysis(base):
             Stop time for analysis (ns)
         skip := float
             Time to skip between frames for analysis (ns)
-        block : array_like, optional
-            Indices of particles to include in the analysis. If None, all particles are considered
         r_max : float
             Maximum radius for RDF calculation (ns)
         binwidth : float
@@ -406,8 +408,6 @@ class Analysis(base):
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
-
-        if block == None: block = np.arange( self.N )
 
         assert name_1 in self.comp_name, f'Error. Component {name_1} not found!'
         assert name_2 in self.comp_name, f'Error. Component {name_2} not found!'
@@ -427,7 +427,7 @@ class Analysis(base):
         print("")
 
         #Load data
-        self.load_data_wrap(skip = skip, block=block)
+        self.load_data_wrap(skip = skip)
 
         w_storage_analysis = np.copy( self.w_storage[begin:stop, :, :] )
 
@@ -446,7 +446,6 @@ class Analysis(base):
         else:
             pos_1 = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_1)] , :]
             pos_2 = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_2)] , :]
-            #pos = np.concatenate((pos_1, pos_2), axis = 1)
 
             binmids, rdf, cdf, pdf = utils.cross_rdf(pos_1 = pos_1, pos_2 = pos_2, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
 
