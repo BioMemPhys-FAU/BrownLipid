@@ -252,6 +252,8 @@ class base:
 
             if len(self.langevin_dynamics) != 0:
 
+                print("Langevin dynamics are requested!")
+
                 #Check for unknown keys
                 unknown = set(self.langevin_dynamics) - {'mass'}
                 if unknown: raise KeyError(f"Unknown key(s) in langevin_dynamics: {unknown}")
@@ -286,6 +288,8 @@ class base:
 
         if self.pressure_coupling is True:
 
+            print("Using default parameters for pressure coupling!")
+
             #Set default values
             self.ref_p = 0                          #Reference pressure (tension) in mN/m
             self.compressibility = 5.6e-05            #Isothermal compressibility in m/mN
@@ -296,6 +300,8 @@ class base:
             self.ref_A = self.area               #Reference area
 
         elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
+
+            print("Pressure coupling is enabled!")
 
             #Check for unknown keys
             unknown = set(self.pressure_coupling) - {'ref_p', 'compressibility', 'tau_p', 'thresh_p', 'nstpcouple', 'K_A', 'ref_A'}
