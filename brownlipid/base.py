@@ -46,10 +46,10 @@ class base:
             input_params = utils.load_params(input_file)
 
             #Save input parameters for run info file
-            self.run_info_params = input_params.copy()
+            self.run_info_params = utils.convert_for_json(input_params.copy())
 
             #Convert dictionary to list
-            input_params = utils.convert_for_json(list(input_params.items()))
+            input_params = list(input_params.items())
 
             #Definine as variables of class
             for k, v in input_params:
