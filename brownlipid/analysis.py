@@ -341,7 +341,8 @@ class Analysis(base):
         print(f"Stop : Frame {stop}")
         print("")
 
-        name_block = np.where(self.comp_mask[self.comp_name.index(name)])[0]
+        comp_idx = np.where(self.comp_name == name)[0][0]
+        name_block = np.where(self.comp_mask[comp_idx])[0]
         block = np.intersect1d(block, name_block)
 
         #Load data
@@ -438,14 +439,17 @@ class Analysis(base):
 
         if name_1 == name_2:
 
-            pos = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_1)] , :]
+            comp_idx = np.where(self.comp_name == name_1)[0][0]
+            pos = w_storage_analysis[:, self.comp_mask[comp_idx] , :]
 
             if bulk: binmids, rdf, cdf, pdf = utils.self_bulk_rdf(pos = pos, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, area = area_analysis, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
             else:    binmids, rdf, cdf, pdf = utils.self_rdf(pos = pos, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
 
         else:
-            pos_1 = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_1)] , :]
-            pos_2 = w_storage_analysis[:, self.comp_mask[self.comp_name.index(name_2)] , :]
+            comp_idx_1 = np.where(self.comp_name == name_1)[0][0]
+            comp_idx_2 = np.where(self.comp_name == name_1)[0][0]
+            pos_1 = w_storage_analysis[:, self.comp_mask[comp_idx_1] , :]
+            pos_2 = w_storage_analysis[:, self.comp_mask[comp_idx_2] , :]
 
             binmids, rdf, cdf, pdf = utils.cross_rdf(pos_1 = pos_1, pos_2 = pos_2, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
 

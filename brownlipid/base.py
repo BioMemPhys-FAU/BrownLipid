@@ -295,7 +295,7 @@ class base:
             self.tau_p = 0.01                      #Rate of pressure adjustment in ns
             self.thresh_p = 1e-21                   #Threshold for coupling to ref_p
             self.nstpcouple = 1                     #Rescaling frequency
-            self.K_A = 225                          #Area compressibility
+            self.K_A = 225                          #Area compressibility in mN/m
             self.ref_A = self.area               #Reference area
 
         elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
