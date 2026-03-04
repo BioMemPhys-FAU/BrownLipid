@@ -168,7 +168,7 @@ class Analysis(base):
         except:
             pass
 
-        if type(block) == type(None): block = np.arange(self.N)
+        if type(block) == type(None): block = np.arange(self.N )
 
         self.Velocity = np.zeros((0, len(block), 2), dtype=np.float32)
         self.time_array = np.zeros((0), dtype=np.float32)
@@ -294,6 +294,31 @@ class Analysis(base):
 
         return 1
 
+    def get_temperature(self, name=None, skip = 1):
+
+        if type(name) == type(None):
+            block = np.arange(self.N)
+            mass = self.mass
+            dof = 2 * self.N - 2
+        else:
+            assert name in self.comp_name, f'Error. Component {name} not found!'
+            comp_idx = np.where(np.atleast_1d(self.comp_name) == name)[0][0]
+            block = np.where(self.comp_mask[comp_idx])[0]
+            mass = self.mass[self.comp_mask[comp_idx]]
+            dof = 2 * np.shape(block)[0]
+
+        self.load_data_Velocity(skip = skip, block = block)
+
+        R = 8.31446
+
+        #Temperature
+        T = np.sum((mass * 1e-3) * self.Velocity**2, axis=(1,2)) / (R * dof)
+
+        T_var = np.sqrt(np.var(T, axis = 0)) / np.mean(T)
+        T_exp_var = np.sqrt(1/np.shape(block)[0])
+
+        return T, T_var, T_exp_var
+
 
     def mean_square_displacement(self, name, begin = 0, stop = None, skip = None, fft = True, block = None):
 
@@ -341,7 +366,7 @@ class Analysis(base):
         print(f"Stop : Frame {stop}")
         print("")
 
-        comp_idx = np.where(self.comp_name == name)[0][0]
+        comp_idx = np.where(np.atleast_1d(self.comp_name) == name)[0][0]
         name_block = np.where(self.comp_mask[comp_idx])[0]
         block = np.intersect1d(block, name_block)
 
@@ -439,15 +464,15 @@ class Analysis(base):
 
         if name_1 == name_2:
 
-            comp_idx = np.where(self.comp_name == name_1)[0][0]
+            comp_idx = np.where(np.atleast_1d(self.comp_name) == name_1)[0][0]
             pos = w_storage_analysis[:, self.comp_mask[comp_idx] , :]
 
             if bulk: binmids, rdf, cdf, pdf = utils.self_bulk_rdf(pos = pos, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth, area = area_analysis, domain_coords = self.domain_coords, radii = self.domain_radii, rmin = self.rmin)
             else:    binmids, rdf, cdf, pdf = utils.self_rdf(pos = pos, area = area_analysis, pbc_dim = self.pbc_dim, r_max = r_max, binwidth = binwidth)
 
         else:
-            comp_idx_1 = np.where(self.comp_name == name_1)[0][0]
-            comp_idx_2 = np.where(self.comp_name == name_1)[0][0]
+            comp_idx_1 = np.where(np.atleast_1d(self.comp_name) == name_1)[0][0]
+            comp_idx_2 = np.where(np.atleast_1d(self.comp_name) == name_1)[0][0]
             pos_1 = w_storage_analysis[:, self.comp_mask[comp_idx_1] , :]
             pos_2 = w_storage_analysis[:, self.comp_mask[comp_idx_2] , :]
 

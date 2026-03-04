@@ -379,7 +379,7 @@ def test_pressure_adjustment_run(
     # return actual_virial
 
 def test_pressure_adjustment_file(
-        input_file='/Users/eliasnickel/DPPC_DIPC_CHOL_mem/run/noK_A_test_run_info.json',
+        input_file='/Users/eliasnickel/DPPC_DIPC_CHOL_mem/run/multi_comp_run_info.json',
         fit_start = 0.37,       #fraction of total time
         xlim = [],              #[xl,xr] with Fraction of total time or False
         ylim = True,            #y-scaling in the xlim interval
@@ -390,6 +390,11 @@ def test_pressure_adjustment_file(
 
     A.load_data_Pressure()
     A.load_data_Area()
+    start = 100 / A.nstxout
+    kBT = 1.38 * A.temp
+    A_msf = np.mean((A.Area[int(start / A.dt):] - np.mean(A.Area[int(start / A.dt):]))**2)
+    K_A = 1e-2 * kBT * np.mean(A.Area[int(start / A.dt):]) / A_msf
+    print('K_A:', K_A)
     A.load_data_potEnergy()
     A.load_data_Virial()
     A.load_data_ScalFac()
@@ -489,6 +494,8 @@ def test_pressure_adjustment_file(
     plt.tight_layout()
     fig.savefig(f'{A.output}_pressure_adjustment.png', dpi=300)
     plt.show()
+
+    A.export_trajectory(pml_file=True, skip=1)
 
 #---------------------------------------------------------------------------------------------------------------------
 
