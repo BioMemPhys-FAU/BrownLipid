@@ -55,6 +55,11 @@ def load_params(json_file):
         'output': 'output'
     }
 
+    #Check for missing values in parameter file
+    missing = set(params.keys()) - set(input_params.keys())
+    if missing:
+        print(f"Input file is missing the following parameters. Default values will be used:\n{missing}\n")
+
     #Overwrite default values with given values
     params.update(input_params)
 
