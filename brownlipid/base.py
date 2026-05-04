@@ -24,12 +24,8 @@ class base:
                          nstxout:                      int = 1,
                           nstchk:                      int = 1,
                     base_d_coeff:       Union[float, list] = 1.,
-                 hard_boundaries:                     dict = {},
                         softwall:                     bool = False,
-                    bounce_scale:       Union[None, float] = None,
             checkpoint_structure:  Union[None, np.ndarray] = None,
-                  random_domains:                     bool = False,
-               diffusion_domains:                    float = 0.0,
                  external_forces:                     dict = {},
                             temp:                    float = 298,
                langevin_dynamics:                     dict = {},
@@ -74,10 +70,8 @@ class base:
             self.checkpoint_structure = checkpoint_structure
             self.base_d_coeff         = base_d_coeff
             self.output               = output
-            self.bounce_scale         = bounce_scale
             self.external_forces      = external_forces
             self.temp                 = temp
-            self.diffusion_domains    = diffusion_domains
             self.softwall             = softwall
             self.pressure_coupling    = pressure_coupling
             self.langevin_dynamics    = langevin_dynamics
@@ -189,8 +183,6 @@ class base:
             print("Found the following LJ parameters:")
             print("sigma/eps:", self.lj_sig, self.lj_eps )
 
-            #self.rmin           = self.lj_sig * 2**(1/6)
-
             #Setup interaction matrices
             comp_ids = np.repeat( np.arange(self.n_comp), self.n_lipids_per_comp )
 
@@ -279,7 +271,7 @@ class base:
                 self.c1 = np.exp(-self.gamma * self.dt)
                 self.c3 = np.sqrt((1-self.c1**2) * self.mass * 1.38 * self.temp * 6.022 * 1e-3)  # kg * nm / (ns * mol) = 10^-3 * kJ * ns / (nm * mol)
 
-            # Disable langevin when dict is empty
+            #Disable langevin when dict is empty
             else: self.langevin_dynamics = False
 
         #----------------------------------------------------------------------------------------------------------------------------------------------
@@ -290,13 +282,13 @@ class base:
             print("Using default parameters for pressure coupling!")
 
             #Set default values
-            self.ref_p = 0                          #Reference pressure (tension) in mN/m
-            self.compressibility = 5.6e-05            #Isothermal compressibility in m/mN
-            self.tau_p = 0.01                      #Rate of pressure adjustment in ns
-            self.thresh_p = 1e-21                   #Threshold for coupling to ref_p
-            self.nstpcouple = 1                     #Rescaling frequency
-            self.K_A = 225                          #Area compressibility in mN/m
-            self.ref_A = self.area               #Reference area
+            self.ref_p = 0                      #Reference pressure (tension) in mN/m
+            self.compressibility = 5.6e-05      #Isothermal compressibility in m/mN
+            self.tau_p = 0.01                   #Rate of pressure adjustment in ns
+            self.thresh_p = 1e-21               #Threshold for coupling to ref_p
+            self.nstpcouple = 1                 #Rescaling frequency
+            self.K_A = 225                      #Area compressibility in mN/m
+            self.ref_A = self.area              #Reference area
 
         elif isinstance(self.pressure_coupling, dict) and len(self.pressure_coupling) != 0:
 

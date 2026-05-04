@@ -325,7 +325,7 @@ class Analysis(base):
         """
         Mean Square Displacement
 
-        Calculate the Mean Square Displacement of selected particles for different lag times.
+        Calculate the Mean Squared Displacement of selected particles for different lag times.
 
         Parameters
         ----------
@@ -817,7 +817,7 @@ class Analysis(base):
 
         assert stop <= self.nsteps * self.dt , f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
         assert begin <= self.nsteps * self.dt, f'Error. There are only {self.nsteps * self.dt} ns simulation time!'
-        assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
+        #assert np.round((stop - begin) % skip) == 0, 'Number of frames is not divisible by skip!'
         assert type(pml_file) in [bool, str], 'pml_file must be a boolean or a string!'
 
         #Convert time to frames

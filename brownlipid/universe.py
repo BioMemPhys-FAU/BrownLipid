@@ -226,7 +226,7 @@ class Universe(base):
         print("Have a nice day and thanks for the fish! :-)")
 
     #--------------------------------------------------------------------------------------------------------------
-    # Function for initilization of the universe
+    #Function for initialization of the universe
 
     def populate_universe_uniform(self):
 
